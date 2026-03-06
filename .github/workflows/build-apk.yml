@@ -18,15 +18,16 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
 
-      - name: 授予 gradlew 执行权限
-        run: chmod +x gradlew
+      - name: 安装匹配版本的Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.3
 
-      - name: 编译 Release APK
-        run: ./gradlew assembleRelease
+      - name: 编译Release APK
+        run: gradle assembleRelease
 
-      - name: 上传 APK 产物
+      - name: 上传APK产物
         uses: actions/upload-artifact@v4
         with:
           name: ConwayDuel-Release-APK

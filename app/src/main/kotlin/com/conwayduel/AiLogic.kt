@@ -73,10 +73,10 @@ object AiLogic {
             }
         }
 
-        // 5. 多重随机干涉：极致灵活，杜绝呆板
+        // 5. 多重随机干涉：极致灵活，杜绝呆板（已修复命名参数报错）
         val chaosForce = PointF(
-            x = (Random.nextFloat() - 0.5f) * 2.8f,
-            y = (Random.nextFloat() - 0.5f) * 2.8f
+            (Random.nextFloat() - 0.5f) * 2.8f,
+            (Random.nextFloat() - 0.5f) * 2.8f
         )
 
         // 6. 力合成，权重决定行为优先级

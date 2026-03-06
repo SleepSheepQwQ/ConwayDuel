@@ -1,2 +1,17 @@
+pluginManagement {
+    repositories {
+        google() // 必须加：AGP插件的专属仓库
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google() // 必须加：Android依赖的仓库
+        mavenCentral()
+    }
+}
+
 include(":app")
 rootProject.name = "ConwayDuel"

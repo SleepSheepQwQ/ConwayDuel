@@ -2,7 +2,7 @@ use glam::Vec2;
 use hecs::World;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
@@ -21,7 +21,7 @@ pub struct GameAppInner {
     renderer: Renderer,
     running: bool,
     animation_handle: Option<i32>,
-    last_frame_time: Option<Instant>,
+    last_frame_time: Option<f64>,  // milliseconds
     accumulated_time: Duration,
     canvas: web_sys::HtmlCanvasElement,
     dpr: f32,
@@ -51,7 +51,7 @@ impl GameAppInner {
             renderer,
             running: false,
             animation_handle: None,
-            last_frame_time: None,
+            last_frame_time: None,  // Performance.now() milliseconds
             accumulated_time: Duration::ZERO,
             canvas,
             dpr,
@@ -63,7 +63,11 @@ impl GameAppInner {
             return;
         }
         self.running = true;
-        self.last_frame_time = Some(Instant::now());
+        let now_ms = web_sys::window()
+            .and_then(|w| w.performance())
+            .map(|p| p.now() as f64)
+            .unwrap_or(0.0);
+        self.last_frame_time = Some(now_ms);
 
         // 使用 Rc<RefCell<>> 包裹 self，实现闭包中的共享所有权
         let app = Rc::new(RefCell::new(self as *mut GameAppInner));
@@ -81,13 +85,17 @@ impl GameAppInner {
             }
 
             // 计算实际帧时间
-            let now = Instant::now();
-            let frame_time = if let Some(last) = app.last_frame_time {
-                now.duration_since(last)
+            let now_ms = web_sys::window()
+                .and_then(|w| w.performance())
+                .map(|p| p.now() as f64)
+                .unwrap_or(0.0);
+            let frame_time = if let Some(last_ms) = app.last_frame_time {
+                let delta_ms = now_ms - last_ms;
+                Duration::from_secs_f64(delta_ms / 1000.0)
             } else {
                 Duration::from_secs_f64(1.0 / 60.0)
             };
-            app.last_frame_time = Some(now);
+            app.last_frame_time = Some(now_ms);
 
             // 累积帧时间
             app.accumulated_time += frame_time;

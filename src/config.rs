@@ -1,4 +1,3 @@
-use glam::Vec2;
 use serde::{Deserialize, Serialize};
 
 // 全局游戏配置，所有参数统一管理，修改这里即可调整全局玩法，无需改业务逻辑

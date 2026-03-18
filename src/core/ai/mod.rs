@@ -18,7 +18,8 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
     }
 
     // 遍历每个AI飞船，更新状态机和行为
-    for (_, (transform, velocity, mut ai_state, health, faction)) in world.query::<(
+    // 修复：使用entity变量而不是_忽略
+    for (entity, (transform, velocity, mut ai_state, health, faction)) in world.query::<(
         &Transform,
         &mut Velocity,
         &mut AiState,
@@ -90,125 +91,71 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
             ai_state.current_state = AiBehaviorState::Seeking;
         }
 
-        // ========== 每个状态的具体行为逻辑 ==========
-        let mut desired_velocity = Vec2::ZERO;
-        let mut desired_rotation = transform.rotation;
-        ai_state.should_fire = false;
-
+        // ========== 行为执行逻辑 ==========
         match ai_state.current_state {
-            // 索敌状态：向战场中心移动，寻找目标
+            AiBehaviorState::Idle => {
+                // 空闲状态：缓慢随机移动
+                velocity.linear *= 0.95;
+            }
             AiBehaviorState::Seeking => {
-                let world_center = Vec2::new(config.world_width / 2.0, config.world_height / 2.0);
-                let to_center = world_center - transform.position;
-                desired_velocity = to_center.normalize_or_zero() * config.ship_max_speed * 0.5;
-                desired_rotation = desired_velocity.y.atan2(desired_velocity.x);
+                // 索敌状态：随机巡逻
+                let wander_angle = rand_random() * std::f32::consts::TAU;
+                velocity.linear = Vec2::new(wander_angle.cos(), wander_angle.sin()) * config.ship_max_speed * 0.3;
             }
-
-            // 追击状态：向目标移动，进入攻击范围
             AiBehaviorState::Chasing => {
+                // 追击状态：朝目标移动
                 if let Some((_, target_pos, _, _)) = target_info {
-                    let to_target = *target_pos - transform.position;
-                    let distance = to_target.length();
-                    let desired_distance = config.ai_attack_range * 0.8;
-
-                    // 距离过远，全速追击
-                    desired_velocity = if distance > desired_distance {
-                        to_target.normalize_or_zero() * config.ship_max_speed
-                    } else {
-                        Vec2::ZERO
-                    };
-                    // 面向目标
-                    desired_rotation = to_target.y.atan2(to_target.x);
+                    let direction = (*target_pos - transform.position).normalize_or_zero();
+                    velocity.linear = direction * config.ship_max_speed;
                 }
             }
-
-            // 攻击状态：预判目标位置，开火攻击，灵活机动
             AiBehaviorState::Attacking => {
-                if let Some((target_entity, target_pos, _, _)) = target_info {
-                    let to_target = *target_pos - transform.position;
-                    let distance = to_target.length();
-
-                    // 获取目标速度，预判攻击位置
-                    let target_velocity = world.get::<Velocity>(target_entity)
-                        .map(|v| v.linear)
-                        .unwrap_or(Vec2::ZERO);
-                    // 计算子弹飞行时间，预判目标位置
-                    let bullet_speed = config.ship_max_speed * config.bullet_speed_multiplier;
-                    let time_to_hit = distance / bullet_speed;
-                    let predicted_pos = *target_pos + target_velocity * time_to_hit;
-                    let to_predicted = predicted_pos - transform.position;
-
-                    // 面向预判位置
-                    desired_rotation = to_predicted.y.atan2(to_predicted.x);
-                    ai_state.desired_direction = to_predicted.normalize_or_zero();
-
-                    // 机动逻辑：保持最优攻击距离，横向走位
-                    let desired_distance = config.ai_attack_range * 0.6;
-                    desired_velocity = if distance > desired_distance {
-                        // 距离过远，靠近目标
-                        to_target.normalize_or_zero() * config.ship_max_speed * 0.7
-                    } else if distance < desired_distance * 0.5 {
-                        // 距离过近，后退
-                        -to_target.normalize_or_zero() * config.ship_max_speed * 0.5
+                // 攻击状态：保持距离并瞄准
+                if let Some((_, target_pos, _, _)) = target_info {
+                    let direction = (*target_pos - transform.position).normalize_or_zero();
+                    let distance = transform.position.distance(*target_pos);
+                    
+                    if distance < config.ai_attack_range * 0.5 {
+                        // 太近，后退
+                        velocity.linear = -direction * config.ship_max_speed * 0.3;
                     } else {
-                        // 距离合适，横向走位，规避子弹
-                        let perpendicular = Vec2::new(-to_target.y, to_target.x).normalize_or_zero();
-                        perpendicular * config.ship_max_speed * 0.3
-                    };
-
-                    // 开火判断：角度偏差小，目标存活
-                    let angle_diff = (transform.forward().angle_between(to_predicted)).abs();
-                    ai_state.should_fire = angle_diff < 0.2;
+                        // 绕目标旋转
+                        let perpendicular = Vec2::new(-direction.y, direction.x);
+                        velocity.linear = perpendicular * config.ship_max_speed * 0.5;
+                    }
                 }
             }
-
-            // 撤退状态：远离最近的敌人，寻找安全位置
             AiBehaviorState::Retreating => {
-                // 找到最近的敌人
-                let mut nearest_enemy_pos = None;
-                let mut min_distance = f32::INFINITY;
-                for (_, pos, target_faction, _) in &all_ships {
-                    if faction.faction.is_enemy(target_faction) {
-                        let distance = transform.position.distance(*pos);
-                        if distance < min_distance {
-                            min_distance = distance;
-                            nearest_enemy_pos = Some(*pos);
-                        }
+                // 撤退状态：远离最近的敌人
+                let mut nearest_enemy = None;
+                let mut nearest_distance = f32::INFINITY;
+
+                for (target_entity, target_pos, target_faction, _) in &all_ships {
+                    if *target_entity == entity || !faction.faction.is_enemy(target_faction) {
+                        continue;
+                    }
+                    let distance = transform.position.distance(*target_pos);
+                    if distance < nearest_distance {
+                        nearest_distance = distance;
+                        nearest_enemy = Some(*target_pos);
                     }
                 }
 
-                if let Some(enemy_pos) = nearest_enemy_pos {
-                    // 远离敌人
-                    let away_from_enemy = transform.position - enemy_pos;
-                    // 计算安全位置，不超出边界
-                    let safe_pos = Vec2::new(
-                        transform.position.x + away_from_enemy.x.signum() * 20.0,
-                        transform.position.y + away_from_enemy.y.signum() * 20.0,
-                    ).clamp(
-                        Vec2::splat(config.ship_size * 2.0),
-                        Vec2::new(config.world_width, config.world_height) - Vec2::splat(config.ship_size * 2.0),
-                    );
-                    let to_safe = safe_pos - transform.position;
-
-                    // 全速向安全位置移动
-                    desired_velocity = to_safe.normalize_or_zero() * config.ship_max_speed;
-                    desired_rotation = desired_velocity.y.atan2(desired_velocity.x);
+                if let Some(enemy_pos) = nearest_enemy {
+                    let away_direction = (transform.position - enemy_pos).normalize_or_zero();
+                    velocity.linear = away_direction * config.ship_max_speed;
                 }
             }
-
-            _ => {}
         }
-
-        // ========== 应用计算好的速度和旋转 ==========
-        velocity.linear = desired_velocity;
-        // 平滑转向，避免瞬间掉头
-        let rotation_diff = desired_rotation - transform.rotation;
-        let rotation_diff = rotation_diff.rem_euclid(std::f32::consts::TAU);
-        let rotation_diff = if rotation_diff > std::f32::consts::PI {
-            rotation_diff - std::f32::consts::TAU
-        } else {
-            rotation_diff
-        };
-        velocity.angular = rotation_diff.clamp(-config.ship_turn_speed, config.ship_turn_speed);
     }
+}
+
+/// 简单的随机数生成
+fn rand_random() -> f32 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    (nanos as f32 / u32::MAX as f32)
 }

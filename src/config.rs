@@ -43,6 +43,9 @@ pub struct GameConfig {
     pub blur_radius: i32,
     pub bloom_strength: f32,
     pub low_performance_mode: bool,
+
+    // 飞船重生配置
+    pub respawn_delay: f32,
 }
 
 // 默认配置，完全匹配项目需求，开箱即用
@@ -70,7 +73,7 @@ impl Default for GameConfig {
 
             ai_view_range: 30.0,
             ai_attack_range: 20.0,
-            ai_evade_threshold: 30.0,
+            ai_evade_threshold: 0.3,
             ai_aggressiveness: 0.8,
             ai_target_lock_time: 1.0,
 
@@ -81,6 +84,8 @@ impl Default for GameConfig {
             blur_radius: 4,
             bloom_strength: 0.6,
             low_performance_mode: false,
+
+            respawn_delay: 3.0,
         }
     }
 }

@@ -19,6 +19,7 @@ rand = "0.8.5"
 console_error_panic_hook = "0.1.7"
 log = "0.4.21"
 wasm-logger = "0.2.0"
+serde = { version = "1.0.197", features = ["derive"] }
 
 [profile.release]
 opt-level = 3

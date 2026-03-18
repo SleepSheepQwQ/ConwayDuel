@@ -10,7 +10,7 @@ use crate::ecs::events::{EventBus, GameEvent};
 pub fn movement_system(world: &mut World, dt: Duration) {
     let dt_secs = dt.as_secs_f32();
 
-    for (_, (transform, velocity)) in world.query::<(&mut Transform, &Velocity)>().iter() {
+    for (_, (transform, velocity)) in world.query::<(&mut Transform, &mut Velocity)>().iter() {
         // 更新位置
         transform.position += velocity.linear * dt_secs;
         // 更新旋转，归一化角度避免溢出
@@ -24,7 +24,7 @@ pub fn movement_system(world: &mut World, dt: Duration) {
 }
 
 // 边界系统：处理实体与战场边界的碰撞反弹，销毁出界子弹
-pub fn boundary_system(world: &mut World, config: &GameConfig) {
+pub fn boundary_system(world: &mut World, event_bus: &mut EventBus, config: &GameConfig) {
     let bounds_min = Vec2::ZERO;
     let bounds_max = Vec2::new(config.world_width, config.world_height);
 
@@ -60,6 +60,12 @@ pub fn boundary_system(world: &mut World, config: &GameConfig) {
             velocity.linear = velocity.linear - 2.0 * velocity.linear.dot(collision_normal) * collision_normal;
             // 应用阻尼，减少能量损耗，避免无限反弹
             velocity.linear *= config.ship_bounce_damping;
+
+            // 发布边界碰撞事件
+            event_bus.publish(GameEvent::BoundaryCollision {
+                entity,
+                normal: collision_normal,
+            });
         }
     }
 

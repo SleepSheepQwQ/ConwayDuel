@@ -6,137 +6,178 @@ use crate::config::{Faction, GameConfig};
 use crate::ecs::components::*;
 use crate::ecs::events::{EventBus, GameEvent};
 
-// 武器系统：处理武器冷却、开火逻辑、生成子弹
+/// 武器系统：处理飞船射击逻辑
 pub fn weapon_system(world: &mut World, dt: Duration, event_bus: &mut EventBus, config: &GameConfig) {
+    // 收集射击信息
     let mut bullets_to_spawn = Vec::new();
 
-    // 遍历所有带武器的飞船
-    for (shooter, (transform, mut weapon, faction, ai_state)) in world.query::<(&Transform, &mut Weapon, &FactionComponent, &AiState)>()
-        .with::<Health>()
-        .iter()
+    for (entity, (transform, _velocity, mut weapon, ai_state, faction)) in world.query::<(
+        &Transform,
+        &Velocity,
+        &mut Weapon,
+        &AiState,
+        &FactionComponent,
+    )>()
+    .iter()
     {
-        // 更新武器冷却，判断是否可以开火
-        let can_fire = weapon.update(dt);
-        if !can_fire || !ai_state.should_fire {
+        // 更新武器冷却
+        weapon.update(dt);
+
+        // 只有攻击状态且有目标才射击
+        if ai_state.current_state != AiBehaviorState::Attacking {
             continue;
         }
 
-        // 开火，重置冷却
-        weapon.fire();
-        let fire_direction = transform.forward();
-
-        // 发布开火事件
-        event_bus.publish(GameEvent::Fire {
-            shooter,
-            position: transform.position,
-            direction: fire_direction,
-            faction: faction.faction,
-        });
-
-        // 收集子弹生成信息，批量生成避免迭代中修改世界
-        bullets_to_spawn.push((
-            Transform {
-                position: transform.position + fire_direction * (config.ship_size * 1.2),
-                rotation: transform.rotation,
-                scale: Vec2::splat(config.bullet_size),
-            },
-            Velocity {
-                linear: fire_direction * weapon.bullet_speed,
-                angular: 0.0,
-                max_speed: weapon.bullet_speed,
-            },
-            Collider {
-                radius: config.bullet_size / 2.0,
-                layer: CollisionLayer::Bullet,
-            },
-            Renderable {
-                color: faction.faction.to_color(),
-                layer: RenderLayer::Bullet,
-                visible: true,
-            },
-            Bullet {
-                lifetime: Duration::ZERO,
-                max_lifetime: Duration::from_secs_f32(config.bullet_lifetime),
-                shooter,
-            },
-        ));
-    }
-
-    // 批量生成子弹，提升性能
-    for bullet in bullets_to_spawn {
-        world.spawn((bullet.0, bullet.1, bullet.2, bullet.3, bullet.4));
-    }
-}
-
-// 伤害系统：处理命中事件，计算伤害，触发死亡
-pub fn damage_system(world: &mut World, event_bus: &mut EventBus) {
-    // 遍历当前帧所有命中事件
-    for event in event_bus.iter() {
-        let GameEvent::Hit { attacker, target, damage, position } = event else {
-            continue;
-        };
-
-        // 获取目标的生命组件，扣血
-        let mut health = match world.get_mut::<Health>(*target) {
-            Ok(h) => h,
-            Err(_) => continue,
-        };
-
-        // 扣血，判断是否死亡
-        let is_dead = health.take_damage(*damage);
-        if is_dead {
-            // 获取目标阵营
-            let faction = world.get::<FactionComponent>(*target)
-                .map(|f| f.faction)
-                .unwrap_or(Faction::Red);
-
-            // 发布死亡事件
-            event_bus.publish(GameEvent::Death {
-                entity: *target,
-                position: *position,
-                faction,
-                killer: Some(*attacker),
-            });
-
-            // 发布爆炸特效事件
-            event_bus.publish(GameEvent::Explosion {
-                position: *position,
-                radius: 3.0,
-                color: faction.to_color(),
-            });
+        if let Some(target) = ai_state.target {
+            if let Ok(target_transform) = world.get::<Transform>(target) {
+                let direction = (target_transform.position - transform.position).normalize_or_zero();
+                
+                // 检查是否可以射击
+                if weapon.can_fire() {
+                    weapon.fire();
+                    bullets_to_spawn.push((
+                        transform.position,
+                        direction,
+                        entity,
+                        faction.faction,
+                        weapon.bullet_speed,
+                        weapon.bullet_damage,
+                        weapon.bullet_lifetime,
+                    ));
+                }
+            }
         }
     }
+
+    // 生成子弹
+    for (position, direction, shooter, faction, speed, damage, lifetime) in bullets_to_spawn {
+        spawn_bullet(world, config, position, direction, shooter, faction, speed, damage, lifetime);
+    }
 }
 
-// 清理系统：销毁死亡实体、过期子弹、过期特效
-pub fn cleanup_system(world: &mut World, dt: Duration) {
-    let mut entities_to_despawn = Vec::new();
+/// 生成子弹
+fn spawn_bullet(
+    world: &mut World,
+    config: &GameConfig,
+    position: Vec2,
+    direction: Vec2,
+    shooter: hecs::Entity,
+    faction: Faction,
+    speed: f32,
+    damage: f32,
+    lifetime: Duration,
+) {
+    let transform = Transform {
+        position,
+        rotation: direction.y.atan2(direction.x),
+        scale: Vec2::splat(config.bullet_size),
+    };
 
-    // 收集死亡的飞船
-    for (entity, health) in world.query::<&Health>().iter() {
+    let velocity = Velocity {
+        linear: direction * speed,
+        angular: 0.0,
+        max_speed: speed,
+    };
+
+    let bullet = Bullet {
+        shooter,
+        lifetime,
+        damage,
+    };
+
+    let collider = Collider {
+        radius: config.bullet_size,
+        layer: CollisionLayer::Bullet,
+    };
+
+    let renderable = Renderable {
+        color: faction.to_color(),
+        layer: RenderLayer::Bullet,
+        visible: true,
+    };
+
+    world.spawn((transform, velocity, bullet, collider, renderable));
+}
+
+/// 伤害系统：处理命中伤害
+pub fn damage_system(world: &mut World, event_bus: &EventBus) {
+    // 收集伤害事件
+    let mut damage_events = Vec::new();
+    for event in event_bus.events() {
+        if let GameEvent::Hit { target, damage, .. } = event {
+            damage_events.push((*target, *damage));
+        }
+    }
+
+    // 应用伤害
+    for (target, damage) in damage_events {
+        if let Ok(mut health) = world.get_mut::<Health>(target) {
+            health.take_damage(damage);
+        }
+    }
+
+    // 处理死亡
+    let mut death_events = Vec::new();
+    for (entity, (health, transform, faction)) in world.query::<(&Health, &Transform, &FactionComponent)>().iter() {
         if health.is_dead {
-            entities_to_despawn.push(entity);
+            death_events.push((entity, transform.position, faction.faction));
         }
     }
 
-    // 收集过期的子弹
-    for (entity, mut bullet) in world.query::<&mut Bullet>().iter() {
-        bullet.lifetime += dt;
-        if bullet.lifetime >= bullet.max_lifetime {
-            entities_to_despawn.push(entity);
-        }
+    // 发布死亡事件
+    for (entity, position, faction) in death_events {
+        event_bus.publish(GameEvent::Death { position, faction });
+        let _ = world.despawn(entity);
     }
+}
 
-    // 收集过期的特效
+/// 生成爆炸特效
+pub fn spawn_explosion(world: &mut World, position: &Vec2, faction: Faction, config: &GameConfig) {
+    let transform = Transform {
+        position: *position,
+        rotation: 0.0,
+        scale: Vec2::splat(config.ship_size),
+    };
+
+    let effect = Effect {
+        lifetime: Duration::from_secs_f32(0.5),
+        max_lifetime: Duration::from_secs_f32(0.5),
+        start_scale: config.ship_size * 0.5,
+        end_scale: config.ship_size * 2.0,
+    };
+
+    let renderable = Renderable {
+        color: faction.to_color(),
+        layer: RenderLayer::Effect,
+        visible: true,
+    };
+
+    world.spawn((transform, effect, renderable));
+}
+
+/// 清理系统：移除死亡实体和过期特效
+pub fn cleanup_system(world: &mut World, dt: Duration) {
+    // 收集需要移除的实体
+    let mut to_remove = Vec::new();
+
+    // 移除过期特效
     for (entity, mut effect) in world.query::<&mut Effect>().iter() {
-        effect.lifetime += dt;
-        if effect.lifetime >= effect.max_lifetime {
-            entities_to_despawn.push(entity);
+        effect.lifetime = effect.lifetime.saturating_sub(dt);
+        if effect.lifetime.is_zero() {
+            to_remove.push(entity);
         }
     }
 
-    // 批量销毁实体，避免内存泄漏
-    for entity in entities_to_despawn {
+    // 移除过期子弹
+    for (entity, mut bullet) in world.query::<&mut Bullet>().iter() {
+        bullet.lifetime = bullet.lifetime.saturating_sub(dt);
+        if bullet.lifetime.is_zero() {
+            to_remove.push(entity);
+        }
+    }
+
+    // 移除实体
+    for entity in to_remove {
         let _ = world.despawn(entity);
     }
 }

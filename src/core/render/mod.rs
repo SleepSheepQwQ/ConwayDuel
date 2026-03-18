@@ -103,6 +103,10 @@ pub struct Renderer {
     config: GameConfig,
     // 相机视图投影矩阵
     view_proj: Mat4,
+    // 星云数据
+    nebula_positions: Vec<Vec2>,
+    // WebGL上下文丢失标记
+    context_lost: bool,
 }
 
 impl Renderer {
@@ -181,6 +185,14 @@ impl Renderer {
                 1.0,
             );
 
+            // 生成星云位置
+            let mut nebula_positions = Vec::new();
+            for i in 0..config.nebula_count {
+                let x = ((i * 17 + 31) % 100) as f32 / 100.0 * config.world_width;
+                let y = ((i * 23 + 47) % 100) as f32 / 100.0 * config.world_height;
+                nebula_positions.push(Vec2::new(x, y));
+            }
+
             Ok(Self {
                 gl,
                 canvas,
@@ -195,6 +207,8 @@ impl Renderer {
                 screen_height: 0,
                 config: config.clone(),
                 view_proj,
+                nebula_positions,
+                context_lost: false,
             })
         }
     }
@@ -268,11 +282,22 @@ impl Renderer {
     }
 
     // 主渲染入口，按层级渲染所有游戏内容
-    pub fn render(&mut self, world: &World) {
+    pub fn render(&mut self, world: &World, config: &GameConfig) {
+        // 检查WebGL上下文是否丢失
+        if self.context_lost {
+            return;
+        }
+
         unsafe {
-            // 清空画布为纯黑色
-            self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
+            // 清空画布为深蓝色背景
+            self.gl.clear_color(0.02, 0.02, 0.08, 1.0);
             self.gl.clear(glow::COLOR_BUFFER_BIT);
+
+            // 渲染背景星云
+            self.render_nebula();
+
+            // 渲染战场边界
+            self.render_boundary(config);
 
             // 收集所有可渲染实体，按层级排序
             let mut renderables = Vec::new();
@@ -306,6 +331,98 @@ impl Renderer {
                 }
             }
         }
+    }
+
+    // 渲染背景星云
+    unsafe fn render_nebula(&mut self) {
+        for pos in &self.nebula_positions {
+            let color = [0.1, 0.1, 0.2, 0.3];
+            self.render_circle(*pos, 3.0, color);
+        }
+    }
+
+    // 渲染战场边界
+    unsafe fn render_boundary(&mut self, config: &GameConfig) {
+        let boundary_color = [0.3, 0.3, 0.4, 0.5];
+        let line_width = 0.1;
+
+        // 底部边界
+        self.render_rect(
+            Vec2::new(config.world_width / 2.0, line_width / 2.0),
+            Vec2::new(config.world_width, line_width),
+            boundary_color,
+        );
+        // 顶部边界
+        self.render_rect(
+            Vec2::new(config.world_width / 2.0, config.world_height - line_width / 2.0),
+            Vec2::new(config.world_width, line_width),
+            boundary_color,
+        );
+        // 左侧边界
+        self.render_rect(
+            Vec2::new(line_width / 2.0, config.world_height / 2.0),
+            Vec2::new(line_width, config.world_height),
+            boundary_color,
+        );
+        // 右侧边界
+        self.render_rect(
+            Vec2::new(config.world_width - line_width / 2.0, config.world_height / 2.0),
+            Vec2::new(line_width, config.world_height),
+            boundary_color,
+        );
+    }
+
+    // 渲染矩形
+    unsafe fn render_rect(&mut self, position: Vec2, size: Vec2, color: [f32; 4]) {
+        self.gl.use_program(Some(self.basic_program));
+
+        let vertices = [
+            Vec2::new(-0.5, -0.5),
+            Vec2::new(0.5, -0.5),
+            Vec2::new(0.5, 0.5),
+            Vec2::new(-0.5, -0.5),
+            Vec2::new(0.5, 0.5),
+            Vec2::new(-0.5, 0.5),
+        ];
+
+        let vbo = self.gl.create_buffer().unwrap();
+        self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+        self.gl.buffer_data_u8_slice(
+            glow::ARRAY_BUFFER,
+            &vertices.align_to::<u8>().1,
+            glow::STREAM_DRAW,
+        );
+
+        self.gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 2 * mem::size_of::<f32>() as i32, 0);
+        self.gl.enable_vertex_attrib_array(0);
+
+        // 应用缩放
+        let scale_matrix = Mat4::from_scale(size.extend(1.0));
+        let mvp = self.view_proj * Mat4::from_translation(position.extend(0.0)) * scale_matrix;
+        self.gl.uniform_matrix_4_f32_slice(
+            self.gl.get_uniform_location(self.basic_program, "u_view_proj").as_ref(),
+            false,
+            &mvp.to_cols_array(),
+        );
+        self.gl.uniform_2_f32(
+            self.gl.get_uniform_location(self.basic_program, "u_offset").as_ref(),
+            0.0,
+            0.0,
+        );
+        self.gl.uniform_1_f32(
+            self.gl.get_uniform_location(self.basic_program, "u_scale").as_ref(),
+            1.0,
+        );
+        self.gl.uniform_4_f32_slice(
+            self.gl.get_uniform_location(self.basic_program, "u_color").as_ref(),
+            &color,
+        );
+
+        self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
+
+        self.gl.delete_buffer(vbo);
+        self.gl.bind_buffer(glow::ARRAY_BUFFER, None);
+        self.gl.use_program(None);
     }
 
     // 渲染飞船（等腰三角形纸飞机）

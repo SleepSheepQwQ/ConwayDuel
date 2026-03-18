@@ -120,7 +120,7 @@ impl Renderer {
             .dyn_into::<web_sys::WebGl2RenderingContext>()
             .map_err(|_| "WebGL2上下文类型转换失败".to_string())?;
 
-        let gl = glow::Context::from_webgl2(gl);
+        let gl = unsafe { glow::Context::from_webgl2_context(gl) };
 
         // 编译着色器程序
         let basic_program = compile_program(&gl, BASIC_VERT, BASIC_FRAG)?;
@@ -314,15 +314,15 @@ impl Renderer {
             // 遍历渲染所有实体
             for (entity, transform, renderable) in renderables {
                 // 渲染飞船
-                if world.get::<FactionComponent>(entity).is_ok() {
+                if world.query_one::<&FactionComponent>(entity).get().is_ok() {
                     self.render_ship(transform, renderable);
                 }
                 // 渲染子弹
-                else if world.get::<Bullet>(entity).is_ok() {
+                else if world.query_one::<&Bullet>(entity).get().is_ok() {
                     self.render_bullet(transform, renderable);
                 }
                 // 渲染爆炸特效
-                else if let Ok(effect) = world.get::<Effect>(entity) {
+                else if let Ok(effect) = world.query_one::<&Effect>(entity).get() {
                     let progress = effect.lifetime.as_secs_f32() / effect.max_lifetime.as_secs_f32();
                     let current_scale = effect.start_scale + (effect.end_scale - effect.start_scale) * progress;
                     let mut color = renderable.color;

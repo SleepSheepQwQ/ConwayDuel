@@ -29,9 +29,7 @@ pub fn boundary_system(world: &mut World, event_bus: &mut EventBus, config: &Gam
     let bounds_max = Vec2::new(config.world_width, config.world_height);
 
     // 处理飞船的边界碰撞与反弹
-    for (entity, (transform, velocity, collider)) in world.query::<(&mut Transform, &mut Velocity, &Collider)>()
-        .with::<FactionComponent>()
-        .iter()
+    for (entity, (transform, velocity, collider, _faction)) in world.query::<(&mut Transform, &mut Velocity, &Collider, &FactionComponent)>().iter()
     {
         let mut collision_normal = Vec2::ZERO;
         let radius = collider.radius;
@@ -71,9 +69,7 @@ pub fn boundary_system(world: &mut World, event_bus: &mut EventBus, config: &Gam
 
     // 销毁出界的子弹，避免内存泄漏
     let mut out_of_bounds_bullets = Vec::new();
-    for (entity, transform) in world.query::<&Transform>()
-        .with::<Bullet>()
-        .iter()
+    for (entity, (transform, _bullet)) in world.query::<(&Transform, &Bullet)>().iter()
     {
         let pos = transform.position;
         if pos.x < bounds_min.x || pos.x > bounds_max.x
@@ -133,9 +129,9 @@ pub fn collision_system(world: &mut World, event_bus: &mut EventBus, config: &Ga
             if distance < min_collision_distance {
                 // 子弹命中飞船
                 if collider_a.layer == CollisionLayer::Bullet && collider_b.layer == CollisionLayer::Ship {
-                    if let Ok(bullet) = world.get::<Bullet>(entity_a) {
+                    if let Ok(bullet) = world.query_one::<&Bullet>(entity_a).get() {
                         // 获取子弹伤害
-                        let damage = world.get::<Weapon>(bullet.shooter)
+                        let damage = world.query_one::<&Weapon>(bullet.shooter).get()
                             .map(|w| w.bullet_damage)
                             .unwrap_or(config.bullet_damage);
                         // 发布命中事件
@@ -151,8 +147,8 @@ pub fn collision_system(world: &mut World, event_bus: &mut EventBus, config: &Ga
                 }
                 // 飞船被子弹命中
                 else if collider_a.layer == CollisionLayer::Ship && collider_b.layer == CollisionLayer::Bullet {
-                    if let Ok(bullet) = world.get::<Bullet>(entity_b) {
-                        let damage = world.get::<Weapon>(bullet.shooter)
+                    if let Ok(bullet) = world.query_one::<&Bullet>(entity_b).get() {
+                        let damage = world.query_one::<&Weapon>(bullet.shooter).get()
                             .map(|w| w.bullet_damage)
                             .unwrap_or(config.bullet_damage);
                         event_bus.publish(GameEvent::Hit {
@@ -168,10 +164,10 @@ pub fn collision_system(world: &mut World, event_bus: &mut EventBus, config: &Ga
                 else if collider_a.layer == CollisionLayer::Ship && collider_b.layer == CollisionLayer::Ship {
                     let collision_normal = (pos_a - pos_b).normalize_or_zero();
                     // 给两个飞船施加反向的速度，实现碰撞反弹
-                    if let Ok(mut vel_a) = world.get_mut::<Velocity>(entity_a) {
+                    if let Ok(mut vel_a) = world.query_one_mut::<&mut Velocity>(entity_a) {
                         vel_a.linear += collision_normal * 0.5;
                     }
-                    if let Ok(mut vel_b) = world.get_mut::<Velocity>(entity_b) {
+                    if let Ok(mut vel_b) = world.query_one_mut::<&mut Velocity>(entity_b) {
                         vel_b.linear -= collision_normal * 0.5;
                     }
                 }

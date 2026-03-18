@@ -29,7 +29,7 @@ pub fn weapon_system(world: &mut World, dt: Duration, event_bus: &mut EventBus, 
         }
 
         if let Some(target) = ai_state.target {
-            if let Ok(target_transform) = world.get::<Transform>(target) {
+            if let Ok(target_transform) = world.query_one::<&Transform>(target).get() {
                 let direction = (target_transform.position - transform.position).normalize_or_zero();
                 
                 // 检查是否可以射击
@@ -111,7 +111,7 @@ pub fn damage_system(world: &mut World, event_bus: &EventBus) {
 
     // 应用伤害
     for (target, damage) in damage_events {
-        if let Ok(mut health) = world.get_mut::<Health>(target) {
+        if let Ok(mut health) = world.query_one_mut::<&mut Health>(target) {
             health.take_damage(damage);
         }
     }

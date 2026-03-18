@@ -1,0 +1,27 @@
+[package]
+name = "conway-duel"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2.92"
+web-sys = { version = "0.3.69", features = [
+  "Window", "Document", "HtmlCanvasElement", "WebGl2RenderingContext",
+  "RequestAnimationFrameCallback", "ResizeObserver", "Performance"
+] }
+hecs = "0.10.0"
+glam = "0.25.0"
+glow = "0.13.1"
+rand = "0.8.5"
+console_error_panic_hook = "0.1.7"
+log = "0.4.21"
+wasm-logger = "0.2.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

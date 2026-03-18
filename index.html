@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <!-- 安卓端全屏适配核心配置：禁止缩放、防滚动条、全面屏安全区域适配 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#000000">
+  <title>几何飞船观战战斗</title>
+  <!-- 引入全屏样式 -->
+  <link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+  <!-- 全屏画布，唯一DOM元素，无冗余节点 -->
+  <canvas id="game-canvas"></canvas>
+  <!-- Trunk 会自动注入Wasm模块和TS代码 -->
+  <script type="module" src="src/main.ts"></script>
+</body>
+</html>

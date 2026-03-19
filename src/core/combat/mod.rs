@@ -10,36 +10,38 @@ use crate::ecs::events::{EventBus, GameEvent};
 pub fn weapon_system(world: &mut World, dt: Duration, _event_bus: &mut EventBus, config: &GameConfig) {
     // 收集射击信息
     let mut bullets_to_spawn = Vec::new();
-
-    for (entity, (transform, _velocity, weapon, ai_state, faction)) in world.query::<(
+    
+    // 先收集所有武器状态和AI状态
+    let mut weapon_states: Vec<(hecs::Entity, Vec2, Faction, Weapon, AiState)> = Vec::new();
+    for (entity, (transform, weapon, ai_state, faction)) in world.query::<(
         &Transform,
-        &Velocity,
         &Weapon,
         &AiState,
         &FactionComponent,
     )>()
     .into_iter()
     {
-        // 更新武器冷却
-        let weapon = weapon;
-        let can_fire = weapon.cooldown_remaining.is_zero();
-        
+        weapon_states.push((entity, transform.position, faction.faction, *weapon, ai_state.clone()));
+    }
+
+    for (entity, position, faction, weapon, ai_state) in &weapon_states {
         // 只有攻击状态且有目标才射击
         if ai_state.current_state != AiBehaviorState::Attacking {
             continue;
         }
 
         if let Some(target) = ai_state.target {
-            if let Some(target_transform) = world.query_one::<&Transform>(target).ok().and_then(|mut q| q.get()) {
-                let direction = (target_transform.position - transform.position).normalize_or_zero();
+            // 获取目标位置
+            if let Some(target_pos) = world.query_one::<&Transform>(target).ok().and_then(|mut q| q.get().map(|t| t.position)) {
+                let direction = (target_pos - position).normalize_or_zero();
                 
                 // 检查是否可以射击
-                if can_fire {
+                if weapon.cooldown_remaining.is_zero() {
                     bullets_to_spawn.push((
-                        transform.position,
+                        *position,
                         direction,
-                        entity,
-                        faction.faction,
+                        *entity,
+                        *faction,
                         weapon.bullet_speed,
                         weapon.bullet_damage,
                         weapon.bullet_lifetime,
@@ -165,32 +167,27 @@ pub fn cleanup_system(world: &mut World, dt: Duration) {
     // 收集需要移除的实体
     let mut to_remove = Vec::new();
 
-    // 移除过期特效
-    for (entity, effect) in world.query::<&mut Effect>().into_iter() {
-        let effect = effect;
-        let new_lifetime = effect.lifetime.saturating_sub(dt);
-        if new_lifetime.is_zero() {
-            to_remove.push(entity);
+    // 检查过期特效
+    for (_entity, effect) in world.query::<&Effect>().into_iter() {
+        if effect.lifetime.is_zero() {
+            // 需要收集 entity，但由于生命周期问题，我们用另一种方式
         }
     }
     
-    // 更新特效生命周期
+    // 更新特效生命周期并收集过期的
     for (entity, effect) in world.query::<&mut Effect>().into_iter() {
         effect.lifetime = effect.lifetime.saturating_sub(dt);
-    }
-
-    // 移除过期子弹
-    for (entity, bullet) in world.query::<&mut Bullet>().into_iter() {
-        let bullet = bullet;
-        let new_lifetime = bullet.lifetime.saturating_sub(dt);
-        if new_lifetime.is_zero() {
+        if effect.lifetime.is_zero() {
             to_remove.push(entity);
         }
     }
-    
-    // 更新子弹生命周期
+
+    // 更新子弹生命周期并收集过期的
     for (entity, bullet) in world.query::<&mut Bullet>().into_iter() {
         bullet.lifetime = bullet.lifetime.saturating_sub(dt);
+        if bullet.lifetime.is_zero() {
+            to_remove.push(entity);
+        }
     }
 
     // 移除实体

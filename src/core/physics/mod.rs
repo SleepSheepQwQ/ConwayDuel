@@ -29,7 +29,6 @@ pub fn boundary_system(world: &mut World, event_bus: &mut EventBus, config: &Gam
     let bounds_min = Vec2::ZERO;
     let bounds_max = Vec2::new(config.world_width, config.world_height);
 
-    // 处理飞船的边界碰撞与反弹
     // 先收集所有需要处理的数据
     let mut boundary_collisions: Vec<(hecs::Entity, Vec2, Vec2)> = Vec::new();
     
@@ -63,7 +62,15 @@ pub fn boundary_system(world: &mut World, event_bus: &mut EventBus, config: &Gam
         }
 
         if collision_normal != Vec2::ZERO {
+            // 计算反弹后的速度
+            let new_velocity = (velocity.linear - 2.0 * velocity.linear.dot(collision_normal) * collision_normal) * config.ship_bounce_damping;
             boundary_collisions.push((entity, collision_normal, new_pos));
+            
+            // 发布边界碰撞事件
+            event_bus.publish(GameEvent::BoundaryCollision {
+                entity,
+                normal: collision_normal,
+            });
         }
     }
 
@@ -73,21 +80,14 @@ pub fn boundary_system(world: &mut World, event_bus: &mut EventBus, config: &Gam
             transform.position = new_pos;
             // 速度沿法线反射，实现反弹
             velocity.linear = velocity.linear - 2.0 * velocity.linear.dot(collision_normal) * collision_normal;
-            // 应用阻尼，减少能量损耗，避免无限反弹
+            // 应用阻尼
             velocity.linear *= config.ship_bounce_damping;
-
-            // 发布边界碰撞事件
-            event_bus.publish(GameEvent::BoundaryCollision {
-                entity,
-                normal: collision_normal,
-            });
         }
     }
 
-    // 销毁出界的子弹，避免内存泄漏
+    // 销毁出界的子弹
     let mut out_of_bounds_bullets = Vec::new();
-    for (entity, (transform, _bullet)) in world.query::<(&Transform, &Bullet)>().into_iter()
-    {
+    for (entity, (transform, _bullet)) in world.query::<(&Transform, &Bullet)>().into_iter() {
         let pos = transform.position;
         if pos.x < bounds_min.x || pos.x > bounds_max.x
             || pos.y < bounds_min.y || pos.y > bounds_max.y
@@ -103,26 +103,25 @@ pub fn boundary_system(world: &mut World, event_bus: &mut EventBus, config: &Gam
 
 // 碰撞系统：检测实体间的碰撞，处理子弹命中、飞船间碰撞
 pub fn collision_system(world: &mut World, event_bus: &mut EventBus, config: &GameConfig) {
-    // 收集所有碰撞体信息，避免迭代中修改世界
-    // 使用 into_iter() 避免生命周期问题
+    // 收集所有碰撞体信息
     let mut colliders: Vec<(hecs::Entity, Vec2, Collider, Option<Faction>)> = Vec::new();
     for (entity, (transform, collider, faction)) in world.query::<(&Transform, &Collider, Option<&FactionComponent>)>().into_iter() {
         let faction_val = faction.map(|f| f.faction);
         colliders.push((entity, transform.position, *collider, faction_val));
     }
 
-    // 收集需要处理的事件，避免在迭代中修改世界
+    // 收集需要处理的事件
     let mut hits_to_process: Vec<(hecs::Entity, hecs::Entity, f32, Vec2)> = Vec::new();
     let mut bullets_to_despawn: Vec<hecs::Entity> = Vec::new();
     let mut ship_collisions: Vec<(hecs::Entity, hecs::Entity)> = Vec::new();
 
-    // 两两碰撞检测，实体数量少，无性能压力
+    // 两两碰撞检测
     for i in 0..colliders.len() {
         let (entity_a, pos_a, collider_a, faction_a) = colliders[i];
         for j in (i + 1)..colliders.len() {
             let (entity_b, pos_b, collider_b, faction_b) = colliders[j];
 
-            // 先判断碰撞层级是否允许碰撞
+            // 判断碰撞层级是否允许碰撞
             if !collider_a.layer.can_collide_with(&collider_b.layer) {
                 continue;
             }
@@ -145,7 +144,7 @@ pub fn collision_system(world: &mut World, event_bus: &mut EventBus, config: &Ga
                 }
             }
 
-            // 圆形碰撞检测，计算距离
+            // 圆形碰撞检测
             let distance = pos_a.distance(pos_b);
             let min_collision_distance = collider_a.radius + collider_b.radius + config.collision_margin;
 
@@ -153,10 +152,10 @@ pub fn collision_system(world: &mut World, event_bus: &mut EventBus, config: &Ga
             if distance < min_collision_distance {
                 // 子弹命中飞船
                 if collider_a.layer == CollisionLayer::Bullet && collider_b.layer == CollisionLayer::Ship {
-                    // 获取子弹信息
-                    if let Some(bullet) = world.query_one::<&Bullet>(entity_a).ok().and_then(|mut q| q.get()) {
-                        let damage = world.query_one::<&Weapon>(bullet.shooter).ok().and_then(|mut q| q.get())
-                            .map(|w| w.bullet_damage)
+                    // 获取子弹信息 - 使用 map 直接获取值
+                    if let Some(bullet) = world.query_one::<&Bullet>(entity_a).ok().and_then(|mut q| q.get().copied()) {
+                        let damage = world.query_one::<&Weapon>(bullet.shooter).ok()
+                            .and_then(|mut q| q.get().map(|w| w.bullet_damage))
                             .unwrap_or(config.bullet_damage);
                         hits_to_process.push((bullet.shooter, entity_b, damage, pos_a));
                         bullets_to_despawn.push(entity_a);
@@ -164,9 +163,9 @@ pub fn collision_system(world: &mut World, event_bus: &mut EventBus, config: &Ga
                 }
                 // 飞船被子弹命中
                 else if collider_a.layer == CollisionLayer::Ship && collider_b.layer == CollisionLayer::Bullet {
-                    if let Some(bullet) = world.query_one::<&Bullet>(entity_b).ok().and_then(|mut q| q.get()) {
-                        let damage = world.query_one::<&Weapon>(bullet.shooter).ok().and_then(|mut q| q.get())
-                            .map(|w| w.bullet_damage)
+                    if let Some(bullet) = world.query_one::<&Bullet>(entity_b).ok().and_then(|mut q| q.get().copied()) {
+                        let damage = world.query_one::<&Weapon>(bullet.shooter).ok()
+                            .and_then(|mut q| q.get().map(|w| w.bullet_damage))
                             .unwrap_or(config.bullet_damage);
                         hits_to_process.push((bullet.shooter, entity_a, damage, pos_b));
                         bullets_to_despawn.push(entity_b);
@@ -198,11 +197,11 @@ pub fn collision_system(world: &mut World, event_bus: &mut EventBus, config: &Ga
     // 处理飞船间碰撞
     for (entity_a, entity_b) in ship_collisions {
         // 获取位置计算碰撞法线
-        let pos_a = world.query_one::<&Transform>(entity_a).ok().and_then(|mut q| q.get())
-            .map(|t| t.position)
+        let pos_a = world.query_one::<&Transform>(entity_a).ok()
+            .and_then(|mut q| q.get().map(|t| t.position))
             .unwrap_or(Vec2::ZERO);
-        let pos_b = world.query_one::<&Transform>(entity_b).ok().and_then(|mut q| q.get())
-            .map(|t| t.position)
+        let pos_b = world.query_one::<&Transform>(entity_b).ok()
+            .and_then(|mut q| q.get().map(|t| t.position))
             .unwrap_or(Vec2::ZERO);
         let collision_normal = (pos_a - pos_b).normalize_or_zero();
         

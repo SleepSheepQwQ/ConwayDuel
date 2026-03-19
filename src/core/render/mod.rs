@@ -315,15 +315,15 @@ impl Renderer {
             // 遍历渲染所有实体
             for (entity, transform, renderable) in renderables {
                 // 渲染飞船
-                if world.query_one::<&FactionComponent>(entity).ok().map(|mut q| q.get()).flatten().is_some() {
-                    self.render_ship(transform, renderable);
+                if world.query_one::<&FactionComponent>(entity).ok().is_some() {
+                    self.render_ship(&transform, &renderable);
                 }
                 // 渲染子弹
-                else if world.query_one::<&Bullet>(entity).ok().map(|mut q| q.get()).flatten().is_some() {
-                    self.render_bullet(transform, renderable);
+                else if world.query_one::<&Bullet>(entity).ok().is_some() {
+                    self.render_bullet(&transform, &renderable);
                 }
                 // 渲染爆炸特效
-                else if let Some(effect) = world.query_one::<&Effect>(entity).ok().and_then(|mut q| q.get()) {
+                else if let Some(effect) = world.query_one::<&Effect>(entity).ok().and_then(|mut q| q.get().copied()) {
                     let progress = effect.lifetime.as_secs_f32() / effect.max_lifetime.as_secs_f32();
                     let current_scale = effect.start_scale + (effect.end_scale - effect.start_scale) * progress;
                     let mut color = renderable.color;

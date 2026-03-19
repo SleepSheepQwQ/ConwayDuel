@@ -137,7 +137,7 @@ impl GameAppInner {
         movement_system(&mut self.world, dt);
         boundary_system(&mut self.world, &mut self.event_bus, &self.config);
         collision_system(&mut self.world, &mut self.event_bus, &self.config);
-        damage_system(&mut self.world, &self.event_bus);
+        damage_system(&mut self.world, &mut self.event_bus);
 
         // 处理爆炸事件，生成特效
         self.process_explosions();

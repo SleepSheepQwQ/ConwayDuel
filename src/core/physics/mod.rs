@@ -62,8 +62,6 @@ pub fn boundary_system(world: &mut World, event_bus: &mut EventBus, config: &Gam
         }
 
         if collision_normal != Vec2::ZERO {
-            // 计算反弹后的速度
-            let new_velocity = (velocity.linear - 2.0 * velocity.linear.dot(collision_normal) * collision_normal) * config.ship_bounce_damping;
             boundary_collisions.push((entity, collision_normal, new_pos));
             
             // 发布边界碰撞事件

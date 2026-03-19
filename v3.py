@@ -1,28 +1,14 @@
 #!/usr/bin/env python3
 """
-ConwayDuel 项目完整修复脚本 v5
-直接重写所有有问题的文件，确保修复成功
+ConwayDuel 项目完整修复脚本
+修复所有编译错误
+
+问题分析：
+1. combat/mod.rs: target_pos - position 类型不匹配（Vec2 - &Vec2）
+2. physics/mod.rs: 未使用的变量 new_velocity
 """
 
 import os
-
-# ============== src/app.rs (关键修复部分) ==============
-def fix_app_rs(filepath):
-    print(f"修复文件: {filepath}")
-    
-    with open(filepath, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
-    # 修复 damage_system 调用 - 需要 &mut
-    content = content.replace(
-        'damage_system(&mut self.world, &self.event_bus);',
-        'damage_system(&mut self.world, &mut self.event_bus);'
-    )
-    
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write(content)
-    
-    print(f"  - 已修复 damage_system 调用")
 
 # ============== src/core/combat/mod.rs ==============
 COMBAT_MOD_RS = '''use glam::Vec2;
@@ -60,7 +46,8 @@ pub fn weapon_system(world: &mut World, dt: Duration, _event_bus: &mut EventBus,
         if let Some(target) = ai_state.target {
             // 获取目标位置
             if let Some(target_pos) = world.query_one::<&Transform>(target).ok().and_then(|mut q| q.get().map(|t| t.position)) {
-                let direction = (target_pos - position).normalize_or_zero();
+                // 注意：position 是 &Vec2，target_pos 是 Vec2，需要解引用
+                let direction = (target_pos - *position).normalize_or_zero();
                 
                 // 检查是否可以射击
                 if weapon.cooldown_remaining.is_zero() {
@@ -194,13 +181,6 @@ pub fn cleanup_system(world: &mut World, dt: Duration) {
     // 收集需要移除的实体
     let mut to_remove = Vec::new();
 
-    // 检查过期特效
-    for (_entity, effect) in world.query::<&Effect>().into_iter() {
-        if effect.lifetime.is_zero() {
-            // 需要收集 entity，但由于生命周期问题，我们用另一种方式
-        }
-    }
-    
     // 更新特效生命周期并收集过期的
     for (entity, effect) in world.query::<&mut Effect>().into_iter() {
         effect.lifetime = effect.lifetime.saturating_sub(dt);
@@ -289,8 +269,6 @@ pub fn boundary_system(world: &mut World, event_bus: &mut EventBus, config: &Gam
         }
 
         if collision_normal != Vec2::ZERO {
-            // 计算反弹后的速度
-            let new_velocity = (velocity.linear - 2.0 * velocity.linear.dot(collision_normal) * collision_normal) * config.ship_bounce_damping;
             boundary_collisions.push((entity, collision_normal, new_pos));
             
             // 发布边界碰撞事件
@@ -443,81 +421,32 @@ pub fn collision_system(world: &mut World, event_bus: &mut EventBus, config: &Ga
 }
 '''
 
-# ============== src/core/render/mod.rs (render 方法修复) ==============
-def fix_render_mod_rs(filepath):
-    print(f"修复文件: {filepath}")
-    
-    with open(filepath, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
-    # 修复 render 方法中的 renderables 收集和使用
-    # 找到 render 方法并修复
-    
-    # 修复1: render_ship 和 render_bullet 调用需要传引用
-    content = content.replace(
-        'self.render_ship(transform, renderable);',
-        'self.render_ship(&transform, &renderable);'
-    )
-    content = content.replace(
-        'self.render_bullet(transform, renderable);',
-        'self.render_bullet(&transform, &renderable);'
-    )
-    
-    # 修复2: query_one API
-    # 检查是否存在组件 - 直接用 ok().is_some()
-    content = content.replace(
-        'world.query_one::<&FactionComponent>(entity).ok().map(|mut q| q.get()).flatten().is_some()',
-        'world.query_one::<&FactionComponent>(entity).ok().is_some()'
-    )
-    content = content.replace(
-        'world.query_one::<&Bullet>(entity).ok().map(|mut q| q.get()).flatten().is_some()',
-        'world.query_one::<&Bullet>(entity).ok().is_some()'
-    )
-    
-    # 修复3: 获取 Effect - 需要复制
-    content = content.replace(
-        'else if let Some(effect) = world.query_one::<&Effect>(entity).ok().and_then(|mut q| q.get())',
-        'else if let Some(effect) = world.query_one::<&Effect>(entity).ok().and_then(|mut q| q.get().copied())'
-    )
-    
-    # 修复4: 不必要的 unsafe
-    content = content.replace(
-        'let gl = unsafe { glow::Context::from_webgl2_context(gl) };',
-        'let gl = glow::Context::from_webgl2_context(gl);'
-    )
-    
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write(content)
-    
-    print(f"  - 已修复 render_ship/render_bullet 调用")
-    print(f"  - 已修复 query_one API")
-
 def write_file(filepath, content):
     """写入文件"""
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(content)
-    print(f"  已写入: {filepath}")
+    print(f"已写入: {filepath}")
 
 def main():
     print("=" * 60)
-    print("ConwayDuel 项目完整修复脚本 v5")
+    print("ConwayDuel 项目修复脚本")
     print("=" * 60)
     print()
     
     # 获取项目根目录
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # 修复文件
-    fix_app_rs(os.path.join(script_dir, 'src/app.rs'))
-    fix_render_mod_rs(os.path.join(script_dir, 'src/core/render/mod.rs'))
+    # 写入修复后的文件
     write_file(os.path.join(script_dir, 'src/core/combat/mod.rs'), COMBAT_MOD_RS)
     write_file(os.path.join(script_dir, 'src/core/physics/mod.rs'), PHYSICS_MOD_RS)
     
     print()
     print("=" * 60)
     print("修复完成！")
-    print("请运行 'cargo check' 验证修复结果")
+    print("修复内容：")
+    print("1. combat/mod.rs: 修复 target_pos - *position 类型问题")
+    print("2. physics/mod.rs: 删除未使用的 new_velocity 变量")
     print("=" * 60)
 
 if __name__ == '__main__':

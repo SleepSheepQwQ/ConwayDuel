@@ -129,10 +129,9 @@ pub fn collision_system(world: &mut World, event_bus: &mut EventBus, config: &Ga
             if distance < min_collision_distance {
                 // 子弹命中飞船
                 if collider_a.layer == CollisionLayer::Bullet && collider_b.layer == CollisionLayer::Ship {
-                    if let Ok(bullet) = world.query_one::<&Bullet>(entity_a).get() {
+                    if let Some(bullet) = world.query_one::<&Bullet>(entity_a).ok().and_then(|q| q.get()) {
                         // 获取子弹伤害
-                        let damage = world.query_one::<&Weapon>(bullet.shooter).get()
-                            .map(|w| w.bullet_damage)
+                        let damage = world.query_one::<&Weapon>(bullet.shooter).ok().and_then(|q| q.get()).map(|w| w.bullet_damage)
                             .unwrap_or(config.bullet_damage);
                         // 发布命中事件
                         event_bus.publish(GameEvent::Hit {
@@ -147,9 +146,8 @@ pub fn collision_system(world: &mut World, event_bus: &mut EventBus, config: &Ga
                 }
                 // 飞船被子弹命中
                 else if collider_a.layer == CollisionLayer::Ship && collider_b.layer == CollisionLayer::Bullet {
-                    if let Ok(bullet) = world.query_one::<&Bullet>(entity_b).get() {
-                        let damage = world.query_one::<&Weapon>(bullet.shooter).get()
-                            .map(|w| w.bullet_damage)
+                    if let Some(bullet) = world.query_one::<&Bullet>(entity_b).ok().and_then(|q| q.get()) {
+                        let damage = world.query_one::<&Weapon>(bullet.shooter).ok().and_then(|q| q.get()).map(|w| w.bullet_damage)
                             .unwrap_or(config.bullet_damage);
                         event_bus.publish(GameEvent::Hit {
                             attacker: bullet.shooter,

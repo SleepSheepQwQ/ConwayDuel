@@ -246,5 +246,5 @@ fn rand_random() -> f32 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .subsec_nanos();
-    (nanos as f32 / u32::MAX as f32)
+    nanos as f32 / u32::MAX as f32
 }

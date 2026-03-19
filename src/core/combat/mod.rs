@@ -29,7 +29,7 @@ pub fn weapon_system(world: &mut World, dt: Duration, event_bus: &mut EventBus, 
         }
 
         if let Some(target) = ai_state.target {
-            if let Ok(target_transform) = world.query_one::<&Transform>(target).get() {
+            if let Some(target_transform) = world.query_one::<&Transform>(target).ok().and_then(|q| q.get()) {
                 let direction = (target_transform.position - transform.position).normalize_or_zero();
                 
                 // 检查是否可以射击

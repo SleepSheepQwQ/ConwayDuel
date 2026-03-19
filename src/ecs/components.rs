@@ -10,8 +10,6 @@ pub struct Transform {
     pub scale: Vec2,
 }
 
-unsafe impl hecs::Component for Transform {}
-
 /// 速度组件：线速度、角速度、最大速度
 #[derive(Debug, Clone, Copy)]
 pub struct Velocity {
@@ -19,8 +17,6 @@ pub struct Velocity {
     pub angular: f32,
     pub max_speed: f32,
 }
-
-unsafe impl hecs::Component for Velocity {}
 
 impl Default for Velocity {
     fn default() -> Self {
@@ -39,8 +35,6 @@ pub struct Health {
     pub max: f32,
     pub is_dead: bool,
 }
-
-unsafe impl hecs::Component for Health {}
 
 impl Health {
     pub fn new(max: f32) -> Self {
@@ -72,8 +66,6 @@ pub struct FactionComponent {
     pub faction: crate::config::Faction,
 }
 
-unsafe impl hecs::Component for FactionComponent {}
-
 /// 武器组件
 #[derive(Debug, Clone)]
 pub struct Weapon {
@@ -83,8 +75,6 @@ pub struct Weapon {
     pub bullet_damage: f32,
     pub bullet_lifetime: Duration,
 }
-
-unsafe impl hecs::Component for Weapon {}
 
 impl Weapon {
     pub fn from_config(config: &GameConfig) -> Self {
@@ -118,8 +108,6 @@ pub enum CollisionLayer {
     Effect,
 }
 
-unsafe impl hecs::Component for CollisionLayer {}
-
 impl CollisionLayer {
     pub fn can_collide_with(&self, other: &Self) -> bool {
         match (self, other) {
@@ -138,8 +126,6 @@ pub struct Collider {
     pub layer: CollisionLayer,
 }
 
-unsafe impl hecs::Component for Collider {}
-
 /// 子弹组件
 #[derive(Debug, Clone, Copy)]
 pub struct Bullet {
@@ -147,8 +133,6 @@ pub struct Bullet {
     pub lifetime: Duration,
     pub damage: f32,
 }
-
-unsafe impl hecs::Component for Bullet {}
 
 /// 渲染层级
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -161,8 +145,6 @@ pub enum RenderLayer {
     Effect = 5,
 }
 
-unsafe impl hecs::Component for RenderLayer {}
-
 /// 可渲染组件
 #[derive(Debug, Clone, Copy)]
 pub struct Renderable {
@@ -170,8 +152,6 @@ pub struct Renderable {
     pub layer: RenderLayer,
     pub visible: bool,
 }
-
-unsafe impl hecs::Component for Renderable {}
 
 /// AI行为状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,8 +163,6 @@ pub enum AiBehaviorState {
     Retreating,
 }
 
-unsafe impl hecs::Component for AiBehaviorState {}
-
 /// AI状态组件
 #[derive(Debug, Clone)]
 pub struct AiState {
@@ -192,8 +170,6 @@ pub struct AiState {
     pub target: Option<hecs::Entity>,
     pub target_lock_timer: Duration,
 }
-
-unsafe impl hecs::Component for AiState {}
 
 impl Default for AiState {
     fn default() -> Self {
@@ -214,15 +190,11 @@ pub struct Effect {
     pub end_scale: f32,
 }
 
-unsafe impl hecs::Component for Effect {}
-
 /// 重生计时器组件
 #[derive(Debug, Clone, Copy)]
 pub struct RespawnTimer {
     pub remaining: Duration,
 }
-
-unsafe impl hecs::Component for RespawnTimer {}
 
 impl RespawnTimer {
     pub fn new(delay: Duration) -> Self {

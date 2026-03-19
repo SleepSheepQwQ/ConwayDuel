@@ -1,14 +1,3 @@
-# =============================================================================
-# ConwayDuel 完整 CI/CD 工作流
-# =============================================================================
-# 特性：
-# 1. 环境自动检查与补全 - 检测缺失工具并自动安装
-# 2. 详细错误捕获 - 解析错误并生成人类化报告
-# 3. 错误报告文件 - 构建失败时生成详细的 txt 报告文件
-# =============================================================================
-# 使用方法：将此文件放到项目的 .github/workflows/ 目录下
-# =============================================================================
-
 name: ConwayDuel CI/CD
 
 on:
@@ -24,24 +13,24 @@ env:
 
 jobs:
   build:
-    name: 构建与检查
+    name: Build
     runs-on: ubuntu-latest
     
     steps:
-      - name: 检出代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 安装 Rust 工具链
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
-      - name: 安装 Trunk (预编译二进制)
+      - name: Install Trunk
         uses: jetli/trunk-action@v0.5.0
         with:
-          version: 'latest'
+          version: latest
 
-      - name: 缓存 Cargo 依赖
+      - name: Cache Cargo
         uses: actions/cache@v4
         with:
           path: |
@@ -49,214 +38,215 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          restore-keys: ${{ runner.os }}-cargo-
 
-      - name: 编译检查
+      - name: Compile Check
         id: compile
-        continue-on-error: true
         run: |
+          set -o pipefail
           mkdir -p reports
-          echo "开始编译检查..."
-          
-          if cargo check --target wasm32-unknown-unknown 2>&1 | tee reports/compile_output.txt; then
-            echo "compile_status=success" >> $GITHUB_OUTPUT
-            echo "编译检查通过"
-          else
-            echo "compile_status=failure" >> $GITHUB_OUTPUT
-            echo "编译检查失败"
-          fi
+          cargo check --target wasm32-unknown-unknown 2>&1 | tee reports/compile_output.txt
 
-      - name: 生成详细错误报告
-        if: steps.compile.outputs.compile_status == 'failure'
+      - name: Generate Detailed Error Report
+        if: failure()
         run: |
           mkdir -p reports
           
-          cat > reports/compilation_errors.txt << 'REPORT_START'
-          ============================================================================
-                          ConwayDuel 编译错误详细报告
-          ============================================================================
-          REPORT_START
+          # 生成报告头部
+          echo "============================================================================" > reports/error_report.txt
+          echo "                    ConwayDuel Compilation Error Report" >> reports/error_report.txt
+          echo "============================================================================" >> reports/error_report.txt
+          echo "" >> reports/error_report.txt
+          echo "Generated: $(date '+%Y-%m-%d %H:%M:%S UTC')" >> reports/error_report.txt
+          echo "Commit: ${{ github.sha }}" >> reports/error_report.txt
+          echo "Branch: ${{ github.ref_name }}" >> reports/error_report.txt
+          echo "Actor: ${{ github.actor }}" >> reports/error_report.txt
+          echo "" >> reports/error_report.txt
           
-          echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S UTC')" >> reports/compilation_errors.txt
-          echo "提交 SHA: ${{ github.sha }}" >> reports/compilation_errors.txt
-          echo "分支:     ${{ github.ref_name }}" >> reports/compilation_errors.txt
-          echo "触发者:   ${{ github.actor }}" >> reports/compilation_errors.txt
-          echo "" >> reports/compilation_errors.txt
-          
-          # 统计错误和警告数量
+          # 统计
           ERROR_COUNT=$(grep -c "^error" reports/compile_output.txt 2>/dev/null || echo "0")
           WARNING_COUNT=$(grep -c "^warning" reports/compile_output.txt 2>/dev/null || echo "0")
           
-          echo "============================================================================" >> reports/compilation_errors.txt
-          echo "统计概览" >> reports/compilation_errors.txt
-          echo "============================================================================" >> reports/compilation_errors.txt
-          echo "  错误数量: $ERROR_COUNT" >> reports/compilation_errors.txt
-          echo "  警告数量: $WARNING_COUNT" >> reports/compilation_errors.txt
-          echo "" >> reports/compilation_errors.txt
+          echo "============================================================================" >> reports/error_report.txt
+          echo "SUMMARY" >> reports/error_report.txt
+          echo "============================================================================" >> reports/error_report.txt
+          echo "Total Errors: $ERROR_COUNT" >> reports/error_report.txt
+          echo "Total Warnings: $WARNING_COUNT" >> reports/error_report.txt
+          echo "" >> reports/error_report.txt
           
-          echo "============================================================================" >> reports/compilation_errors.txt
-          echo "错误详情" >> reports/compilation_errors.txt
-          echo "============================================================================" >> reports/compilation_errors.txt
+          # 解析每个错误
+          echo "============================================================================" >> reports/error_report.txt
+          echo "ERROR DETAILS" >> reports/error_report.txt
+          echo "============================================================================" >> reports/error_report.txt
           
           ERROR_NUM=0
+          CURRENT_FILE=""
+          CURRENT_LINE=""
           
           while IFS= read -r line; do
-            # 检测错误行: error[E0XXX]: message
+            # 检测错误行
             if echo "$line" | grep -qE "^error\[E[0-9]+\]:"; then
               ERROR_NUM=$((ERROR_NUM + 1))
               ERROR_CODE=$(echo "$line" | grep -oE 'E[0-9]+')
               ERROR_MSG=$(echo "$line" | sed 's/^error\[E[0-9]*\]: //')
-              
-              echo "" >> reports/compilation_errors.txt
-              echo "----------------------------------------------------------------------------" >> reports/compilation_errors.txt
-              echo "[错误 #$ERROR_NUM]" >> reports/compilation_errors.txt
-              echo "----------------------------------------------------------------------------" >> reports/compilation_errors.txt
-              echo "错误代码: $ERROR_CODE" >> reports/compilation_errors.txt
-              echo "错误描述: $ERROR_MSG" >> reports/compilation_errors.txt
+              echo "" >> reports/error_report.txt
+              echo "----------------------------------------------------------------------------" >> reports/error_report.txt
+              echo "[ERROR #$ERROR_NUM]" >> reports/error_report.txt
+              echo "----------------------------------------------------------------------------" >> reports/error_report.txt
+              echo "Error Code: $ERROR_CODE" >> reports/error_report.txt
+              echo "Message: $ERROR_MSG" >> reports/error_report.txt
             fi
             
-            # 检测文件位置: --> src/file.rs:line:col
+            # 检测文件位置
             if echo "$line" | grep -qE "^\s+-->.+\.rs:[0-9]+:[0-9]+"; then
               LOCATION=$(echo "$line" | grep -oE '[^/]+\.rs:[0-9]+:[0-9]+')
               FILE_NAME=$(echo "$LOCATION" | cut -d: -f1)
               LINE_NUM=$(echo "$LOCATION" | cut -d: -f2)
               COL_NUM=$(echo "$LOCATION" | cut -d: -f3)
-              
-              echo "文件位置: $FILE_NAME" >> reports/compilation_errors.txt
-              echo "行号:     $LINE_NUM" >> reports/compilation_errors.txt
-              echo "列号:     $COL_NUM" >> reports/compilation_errors.txt
+              CURRENT_FILE="$FILE_NAME"
+              CURRENT_LINE="$LINE_NUM"
+              echo "File: $FILE_NAME" >> reports/error_report.txt
+              echo "Line: $LINE_NUM" >> reports/error_report.txt
+              echo "Column: $COL_NUM" >> reports/error_report.txt
               
               # 读取代码内容
               if [ -f "$FILE_NAME" ]; then
-                CODE_LINE=$(sed -n "${LINE_NUM}p" "$FILE_NAME" 2>/dev/null || echo "无法读取")
-                echo "代码内容: $CODE_LINE" >> reports/compilation_errors.txt
+                CODE_LINE=$(sed -n "${LINE_NUM}p" "$FILE_NAME" 2>/dev/null)
+                if [ -n "$CODE_LINE" ]; then
+                  echo "" >> reports/error_report.txt
+                  echo "Code at line $LINE_NUM:" >> reports/error_report.txt
+                  echo "  $CODE_LINE" >> reports/error_report.txt
+                  # 显示上下文
+                  START_LINE=$((LINE_NUM - 2))
+                  [ $START_LINE -lt 1 ] && START_LINE=1
+                  END_LINE=$((LINE_NUM + 2))
+                  echo "" >> reports/error_report.txt
+                  echo "Context (lines $START_LINE-$END_LINE):" >> reports/error_report.txt
+                  sed -n "${START_LINE},${END_LINE}p" "$FILE_NAME" | nl -v $START_LINE >> reports/error_report.txt
+                fi
               fi
             fi
             
             # 检测帮助信息
             if echo "$line" | grep -qE "^\s*= help:"; then
               HELP_MSG=$(echo "$line" | sed 's/^\s*= help: //')
-              echo "帮助提示: $HELP_MSG" >> reports/compilation_errors.txt
+              echo "Help: $HELP_MSG" >> reports/error_report.txt
             fi
             
             # 检测备注
             if echo "$line" | grep -qE "^\s*= note:"; then
               NOTE_MSG=$(echo "$line" | sed 's/^\s*= note: //')
-              echo "备注:     $NOTE_MSG" >> reports/compilation_errors.txt
+              echo "Note: $NOTE_MSG" >> reports/error_report.txt
+            fi
+            
+            # 检测建议
+            if echo "$line" | grep -qE "^\s*= suggestion:"; then
+              SUG_MSG=$(echo "$line" | sed 's/^\s*= suggestion: //')
+              echo "Suggestion: $SUG_MSG" >> reports/error_report.txt
             fi
           done < reports/compile_output.txt
           
-          # 添加错误代码说明
-          echo "" >> reports/compilation_errors.txt
-          echo "============================================================================" >> reports/compilation_errors.txt
-          echo "常见错误代码说明" >> reports/compilation_errors.txt
-          echo "============================================================================" >> reports/compilation_errors.txt
-          echo "  E0107 - 缺少泛型参数，类型定义需要指定泛型参数" >> reports/compilation_errors.txt
-          echo "  E0277 - trait bound 不满足，类型未实现所需的 trait" >> reports/compilation_errors.txt
-          echo "  E0308 - 类型不匹配，期望的类型与实际类型不一致" >> reports/compilation_errors.txt
-          echo "  E0425 - 未找到值，变量或函数未定义" >> reports/compilation_errors.txt
-          echo "  E0433 - 未找到模块或 crate，导入路径不存在" >> reports/compilation_errors.txt
-          echo "  E0599 - 未找到方法，类型上不存在该方法" >> reports/compilation_errors.txt
-          echo "  E0616 - 字段私有，无法访问私有字段" >> reports/compilation_errors.txt
-          echo "  E0658 - 实验性特性，使用了未稳定的特性" >> reports/compilation_errors.txt
-          echo "  E0716 - 引用生命周期问题，引用的生命周期不明确" >> reports/compilation_errors.txt
-          echo "" >> reports/compilation_errors.txt
+          # 错误代码说明
+          echo "" >> reports/error_report.txt
+          echo "============================================================================" >> reports/error_report.txt
+          echo "COMMON ERROR CODES REFERENCE" >> reports/error_report.txt
+          echo "============================================================================" >> reports/error_report.txt
+          echo "E0107 - Missing generic type parameter" >> reports/error_report.txt
+          echo "E0277 - Trait bound not satisfied (type missing required trait)" >> reports/error_report.txt
+          echo "E0308 - Type mismatch (expected one type, found another)" >> reports/error_report.txt
+          echo "E0425 - Cannot find value (variable/function not in scope)" >> reports/error_report.txt
+          echo "E0433 - Cannot find module or crate (import path invalid)" >> reports/error_report.txt
+          echo "E0599 - No method found (method does not exist on this type)" >> reports/error_report.txt
+          echo "E0616 - Cannot access private field" >> reports/error_report.txt
+          echo "E0658 - Unstable feature (requires nightly Rust)" >> reports/error_report.txt
+          echo "E0716 - Lifetime issue (reference lifetime unclear)" >> reports/error_report.txt
+          echo "E0432 - Unresolved import" >> reports/error_report.txt
+          echo "E0301 - Borrow mutably while borrowed" >> reports/error_report.txt
+          echo "E0382 - Use of moved value" >> reports/error_report.txt
+          echo "" >> reports/error_report.txt
           
-          # 添加完整日志
-          echo "============================================================================" >> reports/compilation_errors.txt
-          echo "完整编译日志" >> reports/compilation_errors.txt
-          echo "============================================================================" >> reports/compilation_errors.txt
-          cat reports/compile_output.txt >> reports/compilation_errors.txt
+          # 完整日志
+          echo "============================================================================" >> reports/error_report.txt
+          echo "FULL COMPILATION LOG" >> reports/error_report.txt
+          echo "============================================================================" >> reports/error_report.txt
+          cat reports/compile_output.txt >> reports/error_report.txt
           
+          # 显示报告
           echo ""
-          echo "错误报告已生成！"
-          cat reports/compilation_errors.txt
+          echo "=========================================="
+          echo "ERROR REPORT GENERATED"
+          echo "=========================================="
+          cat reports/error_report.txt
 
-      - name: 上传错误报告
-        if: failure() || steps.compile.outputs.compile_status == 'failure'
+      - name: Upload Error Report
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: compilation-errors-report
-          path: reports/compilation_errors.txt
+          name: error-report
+          path: reports/error_report.txt
           retention-days: 90
 
-      - name: 编译失败终止
-        if: steps.compile.outputs.compile_status == 'failure'
-        run: |
-          echo "::error::编译失败！请下载 compilation-errors-report 查看详细错误报告"
-          exit 1
-
-      - name: 构建发布版本
+      - name: Build Release
         id: build
-        continue-on-error: true
         run: |
+          set -o pipefail
           mkdir -p reports
-          echo "开始构建发布版本..."
-          
-          if trunk build --release 2>&1 | tee reports/build_output.txt; then
-            echo "build_status=success" >> $GITHUB_OUTPUT
-            echo "构建成功"
-          else
-            echo "build_status=failure" >> $GITHUB_OUTPUT
-            echo "构建失败"
-          fi
+          trunk build --release 2>&1 | tee reports/build_output.txt
 
-      - name: 生成构建错误报告
-        if: steps.build.outputs.build_status == 'failure'
+      - name: Generate Build Error Report
+        if: failure()
         run: |
           mkdir -p reports
           
-          cat > reports/build_errors.txt << 'REPORT_START'
-          ============================================================================
-                          ConwayDuel 构建错误详细报告
-          ============================================================================
-          REPORT_START
+          echo "============================================================================" > reports/build_error_report.txt
+          echo "                    ConwayDuel Build Error Report" >> reports/build_error_report.txt
+          echo "============================================================================" >> reports/build_error_report.txt
+          echo "" >> reports/build_error_report.txt
+          echo "Generated: $(date '+%Y-%m-%d %H:%M:%S UTC')" >> reports/build_error_report.txt
+          echo "Commit: ${{ github.sha }}" >> reports/build_error_report.txt
+          echo "Branch: ${{ github.ref_name }}" >> reports/build_error_report.txt
+          echo "" >> reports/build_error_report.txt
           
-          echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S UTC')" >> reports/build_errors.txt
-          echo "提交 SHA: ${{ github.sha }}" >> reports/build_errors.txt
-          echo "分支:     ${{ github.ref_name }}" >> reports/build_errors.txt
-          echo "" >> reports/build_errors.txt
-          
-          echo "============================================================================" >> reports/build_errors.txt
-          echo "构建错误详情" >> reports/build_errors.txt
-          echo "============================================================================" >> reports/build_errors.txt
+          # 解析构建错误
+          echo "============================================================================" >> reports/build_error_report.txt
+          echo "BUILD ERRORS" >> reports/build_error_report.txt
+          echo "============================================================================" >> reports/build_error_report.txt
           
           while IFS= read -r line; do
             if echo "$line" | grep -qE "^error"; then
-              echo "[ERROR] $line" >> reports/build_errors.txt
-            elif echo "$line" | grep -qE "^warning"; then
-              echo "[WARN]  $line" >> reports/build_errors.txt
-            elif echo "$line" | grep -qE "^\s+-->"; then
-              echo "        $line" >> reports/build_errors.txt
-            elif echo "$line" | grep -qE "^\s*= "; then
-              echo "        $line" >> reports/build_errors.txt
+              echo "" >> reports/build_error_report.txt
+              echo "[ERROR] $line" >> reports/build_error_report.txt
+            fi
+            if echo "$line" | grep -qE "^\s+-->.+\.rs:[0-9]+:[0-9]+"; then
+              LOCATION=$(echo "$line" | grep -oE '[^/]+\.rs:[0-9]+:[0-9]+')
+              FILE_NAME=$(echo "$LOCATION" | cut -d: -f1)
+              LINE_NUM=$(echo "$LOCATION" | cut -d: -f2)
+              echo "  File: $FILE_NAME, Line: $LINE_NUM" >> reports/build_error_report.txt
+              if [ -f "$FILE_NAME" ]; then
+                CODE_LINE=$(sed -n "${LINE_NUM}p" "$FILE_NAME" 2>/dev/null)
+                echo "  Code: $CODE_LINE" >> reports/build_error_report.txt
+              fi
             fi
           done < reports/build_output.txt
           
-          echo "" >> reports/build_errors.txt
-          echo "============================================================================" >> reports/build_errors.txt
-          echo "完整构建日志" >> reports/build_errors.txt
-          echo "============================================================================" >> reports/build_errors.txt
-          cat reports/build_output.txt >> reports/build_errors.txt
+          echo "" >> reports/build_error_report.txt
+          echo "============================================================================" >> reports/build_error_report.txt
+          echo "FULL BUILD LOG" >> reports/build_error_report.txt
+          echo "============================================================================" >> reports/build_error_report.txt
+          cat reports/build_output.txt >> reports/build_error_report.txt
           
-          cat reports/build_errors.txt
+          cat reports/build_error_report.txt
 
-      - name: 上传构建错误报告
-        if: failure() || steps.build.outputs.build_status == 'failure'
+      - name: Upload Build Error Report
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-errors-report
-          path: reports/build_errors.txt
+          name: build-error-report
+          path: reports/build_error_report.txt
           retention-days: 90
 
-      - name: 构建失败终止
-        if: steps.build.outputs.build_status == 'failure'
-        run: |
-          echo "::error::构建失败！请下载 build-errors-report 查看详细错误报告"
-          exit 1
-
-      - name: 上传构建产物
+      - name: Upload Artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: conway-duel-dist
@@ -264,10 +254,10 @@ jobs:
           retention-days: 30
 
   deploy:
-    name: 部署到 GitHub Pages
+    name: Deploy
     runs-on: ubuntu-latest
     needs: build
-    if: success() && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     
     permissions:
       contents: read
@@ -279,20 +269,20 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     
     steps:
-      - name: 下载构建产物
+      - name: Download Artifact
         uses: actions/download-artifact@v4
         with:
           name: conway-duel-dist
           path: dist/
 
-      - name: 配置 GitHub Pages
+      - name: Configure Pages
         uses: actions/configure-pages@v4
 
-      - name: 上传到 GitHub Pages
+      - name: Upload Pages
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist/
 
-      - name: 部署
+      - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4

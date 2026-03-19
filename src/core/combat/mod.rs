@@ -7,34 +7,34 @@ use crate::ecs::components::*;
 use crate::ecs::events::{EventBus, GameEvent};
 
 /// 武器系统：处理飞船射击逻辑
-pub fn weapon_system(world: &mut World, dt: Duration, event_bus: &mut EventBus, config: &GameConfig) {
+pub fn weapon_system(world: &mut World, dt: Duration, _event_bus: &mut EventBus, config: &GameConfig) {
     // 收集射击信息
     let mut bullets_to_spawn = Vec::new();
 
-    for (entity, (transform, _velocity, mut weapon, ai_state, faction)) in world.query::<(
+    for (entity, (transform, _velocity, weapon, ai_state, faction)) in world.query::<(
         &Transform,
         &Velocity,
-        &mut Weapon,
+        &Weapon,
         &AiState,
         &FactionComponent,
     )>()
-    .iter()
+    .into_iter()
     {
         // 更新武器冷却
-        weapon.update(dt);
-
+        let weapon = weapon;
+        let can_fire = weapon.cooldown_remaining.is_zero();
+        
         // 只有攻击状态且有目标才射击
         if ai_state.current_state != AiBehaviorState::Attacking {
             continue;
         }
 
         if let Some(target) = ai_state.target {
-            if let Some(target_transform) = world.query_one::<&Transform>(target).ok().and_then(|q| q.get()) {
+            if let Some(target_transform) = world.query_one::<&Transform>(target).ok().and_then(|mut q| q.get()) {
                 let direction = (target_transform.position - transform.position).normalize_or_zero();
                 
                 // 检查是否可以射击
-                if weapon.can_fire() {
-                    weapon.fire();
+                if can_fire {
                     bullets_to_spawn.push((
                         transform.position,
                         direction,
@@ -47,6 +47,11 @@ pub fn weapon_system(world: &mut World, dt: Duration, event_bus: &mut EventBus, 
                 }
             }
         }
+    }
+
+    // 更新武器冷却
+    for (_, weapon) in world.query::<&mut Weapon>().into_iter() {
+        weapon.update(dt);
     }
 
     // 生成子弹
@@ -100,7 +105,7 @@ fn spawn_bullet(
 }
 
 /// 伤害系统：处理命中伤害
-pub fn damage_system(world: &mut World, event_bus: &EventBus) {
+pub fn damage_system(world: &mut World, event_bus: &mut EventBus) {
     // 收集伤害事件
     let mut damage_events = Vec::new();
     for event in event_bus.events() {
@@ -111,14 +116,14 @@ pub fn damage_system(world: &mut World, event_bus: &EventBus) {
 
     // 应用伤害
     for (target, damage) in damage_events {
-        if let Ok(mut health) = world.query_one_mut::<&mut Health>(target) {
+        if let Ok(health) = world.query_one_mut::<&mut Health>(target) {
             health.take_damage(damage);
         }
     }
 
     // 处理死亡
     let mut death_events = Vec::new();
-    for (entity, (health, transform, faction)) in world.query::<(&Health, &Transform, &FactionComponent)>().iter() {
+    for (entity, (health, transform, faction)) in world.query::<(&Health, &Transform, &FactionComponent)>().into_iter() {
         if health.is_dead {
             death_events.push((entity, transform.position, faction.faction));
         }
@@ -161,19 +166,31 @@ pub fn cleanup_system(world: &mut World, dt: Duration) {
     let mut to_remove = Vec::new();
 
     // 移除过期特效
-    for (entity, mut effect) in world.query::<&mut Effect>().iter() {
-        effect.lifetime = effect.lifetime.saturating_sub(dt);
-        if effect.lifetime.is_zero() {
+    for (entity, effect) in world.query::<&mut Effect>().into_iter() {
+        let effect = effect;
+        let new_lifetime = effect.lifetime.saturating_sub(dt);
+        if new_lifetime.is_zero() {
             to_remove.push(entity);
         }
     }
+    
+    // 更新特效生命周期
+    for (entity, effect) in world.query::<&mut Effect>().into_iter() {
+        effect.lifetime = effect.lifetime.saturating_sub(dt);
+    }
 
     // 移除过期子弹
-    for (entity, mut bullet) in world.query::<&mut Bullet>().iter() {
-        bullet.lifetime = bullet.lifetime.saturating_sub(dt);
-        if bullet.lifetime.is_zero() {
+    for (entity, bullet) in world.query::<&mut Bullet>().into_iter() {
+        let bullet = bullet;
+        let new_lifetime = bullet.lifetime.saturating_sub(dt);
+        if new_lifetime.is_zero() {
             to_remove.push(entity);
         }
+    }
+    
+    // 更新子弹生命周期
+    for (entity, bullet) in world.query::<&mut Bullet>().into_iter() {
+        bullet.lifetime = bullet.lifetime.saturating_sub(dt);
     }
 
     // 移除实体

@@ -120,7 +120,7 @@ impl Renderer {
             .dyn_into::<web_sys::WebGl2RenderingContext>()
             .map_err(|_| "WebGL2上下文类型转换失败".to_string())?;
 
-        let gl = unsafe { glow::Context::from_webgl2_context(gl) };
+        let gl = glow::Context::from_webgl2_context(gl);
 
         // 编译着色器程序
         let basic_program = compile_program(&gl, BASIC_VERT, BASIC_FRAG)?;
@@ -300,12 +300,13 @@ impl Renderer {
             self.render_boundary(config);
 
             // 收集所有可渲染实体，按层级排序
-            let mut renderables = Vec::new();
-            for (entity, (transform, renderable)) in world.query::<(&Transform, &Renderable)>().iter() {
+            // 使用 into_iter() 避免生命周期问题
+            let mut renderables: Vec<(hecs::Entity, Transform, Renderable)> = Vec::new();
+            for (entity, (transform, renderable)) in world.query::<(&Transform, &Renderable)>().into_iter() {
                 if !renderable.visible {
                     continue;
                 }
-                renderables.push((entity, transform, renderable));
+                renderables.push((entity, *transform, *renderable));
             }
 
             // 按渲染层级从后往前渲染，保证层级正确
@@ -314,15 +315,15 @@ impl Renderer {
             // 遍历渲染所有实体
             for (entity, transform, renderable) in renderables {
                 // 渲染飞船
-                if world.query_one::<&FactionComponent>(entity).ok().map(|q| q.get()).flatten().is_some() {
+                if world.query_one::<&FactionComponent>(entity).ok().map(|mut q| q.get()).flatten().is_some() {
                     self.render_ship(transform, renderable);
                 }
                 // 渲染子弹
-                else if world.query_one::<&Bullet>(entity).ok().map(|q| q.get()).flatten().is_some() {
+                else if world.query_one::<&Bullet>(entity).ok().map(|mut q| q.get()).flatten().is_some() {
                     self.render_bullet(transform, renderable);
                 }
                 // 渲染爆炸特效
-                else if let Some(effect) = world.query_one::<&Effect>(entity).ok().and_then(|q| q.get()) {
+                else if let Some(effect) = world.query_one::<&Effect>(entity).ok().and_then(|mut q| q.get()) {
                     let progress = effect.lifetime.as_secs_f32() / effect.max_lifetime.as_secs_f32();
                     let current_scale = effect.start_scale + (effect.end_scale - effect.start_scale) * progress;
                     let mut color = renderable.color;

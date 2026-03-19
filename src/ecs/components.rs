@@ -1,6 +1,6 @@
 use glam::Vec2;
 use std::time::Duration;
-use crate::config::GameConfig;
+use crate::config::{Faction, GameConfig};
 
 /// 变换组件：位置、旋转、缩放
 #[derive(Debug, Clone, Copy)]
@@ -63,7 +63,7 @@ impl Health {
 /// 阵营组件
 #[derive(Debug, Clone, Copy)]
 pub struct FactionComponent {
-    pub faction: crate::config::Faction,
+    pub faction: Faction,
 }
 
 /// 武器组件

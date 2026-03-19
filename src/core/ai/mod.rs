@@ -10,7 +10,7 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
     // 先收集所有存活飞船的信息，用于索敌逻辑
     let mut all_ships = Vec::new();
     for (entity, (transform, health, faction)) in world.query::<(&Transform, &Health, &FactionComponent)>()
-        .iter()
+        .into_iter()
     {
         if !health.is_dead {
             all_ships.push((entity, transform.position, faction.faction, health.current));
@@ -18,15 +18,14 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
     }
 
     // 遍历每个AI飞船，更新状态机和行为
-    // 修复：使用entity变量而不是_忽略
-    for (entity, (transform, velocity, mut ai_state, health, faction)) in world.query::<(
+    for (entity, (transform, velocity, ai_state, health, faction)) in world.query::<(
         &Transform,
         &mut Velocity,
         &mut AiState,
         &Health,
         &FactionComponent,
     )>()
-    .iter()
+    .into_iter()
     {
         if health.is_dead {
             continue;

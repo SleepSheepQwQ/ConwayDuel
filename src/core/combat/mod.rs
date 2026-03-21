@@ -21,7 +21,7 @@ pub fn weapon_system(world: &mut World, dt: Duration, _event_bus: &mut EventBus,
     )>()
     .into_iter()
     {
-        weapon_states.push((entity, transform.position, faction.faction, *weapon, ai_state.clone()));
+        weapon_states.push((entity, transform.position, faction.faction, weapon.clone(), ai_state.clone())); // 修改在此处：*weapon -> weapon.clone()
     }
 
     for (entity, position, faction, weapon, ai_state) in &weapon_states {
@@ -33,8 +33,7 @@ pub fn weapon_system(world: &mut World, dt: Duration, _event_bus: &mut EventBus,
         if let Some(target) = ai_state.target {
             // 获取目标位置
             if let Some(target_pos) = world.query_one::<&Transform>(target).ok().and_then(|mut q| q.get().map(|t| t.position)) {
-                // 注意：position 是 &Vec2，target_pos 是 Vec2，需要解引用
-                let direction = (target_pos - *position).normalize_or_zero();
+                let direction = (target_pos - position).normalize_or_zero();
                 
                 // 检查是否可以射击
                 if weapon.cooldown_remaining.is_zero() {
@@ -168,6 +167,13 @@ pub fn cleanup_system(world: &mut World, dt: Duration) {
     // 收集需要移除的实体
     let mut to_remove = Vec::new();
 
+    // 检查过期特效
+    for (_entity, effect) in world.query::<&Effect>().into_iter() {
+        if effect.lifetime.is_zero() {
+            // 需要收集 entity，但由于生命周期问题，我们用另一种方式
+        }
+    }
+    
     // 更新特效生命周期并收集过期的
     for (entity, effect) in world.query::<&mut Effect>().into_iter() {
         effect.lifetime = effect.lifetime.saturating_sub(dt);

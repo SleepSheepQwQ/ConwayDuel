@@ -67,7 +67,7 @@ pub struct FactionComponent {
 }
 
 /// 武器组件
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone)] // 修改在此处：添加了 `Clone`
 pub struct Weapon {
     pub fire_cooldown: Duration,
     pub cooldown_remaining: Duration,

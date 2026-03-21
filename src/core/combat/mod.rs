@@ -21,7 +21,7 @@ pub fn weapon_system(world: &mut World, dt: Duration, _event_bus: &mut EventBus,
     )>()
     .into_iter()
     {
-        weapon_states.push((entity, transform.position, faction.faction, weapon.clone(), ai_state.clone())); // 修改在此处：*weapon -> weapon.clone()
+        weapon_states.push((entity, transform.position, faction.faction, weapon.clone(), ai_state.clone()));
     }
 
     for (entity, position, faction, weapon, ai_state) in &weapon_states {
@@ -33,7 +33,7 @@ pub fn weapon_system(world: &mut World, dt: Duration, _event_bus: &mut EventBus,
         if let Some(target) = ai_state.target {
             // 获取目标位置
             if let Some(target_pos) = world.query_one::<&Transform>(target).ok().and_then(|mut q| q.get().map(|t| t.position)) {
-                let direction = (target_pos - position).normalize_or_zero();
+                let direction = (target_pos - *position).normalize_or_zero();  // 修复：添加 * 解引用
                 
                 // 检查是否可以射击
                 if weapon.cooldown_remaining.is_zero() {

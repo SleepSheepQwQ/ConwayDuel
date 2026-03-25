@@ -21,41 +21,61 @@ pub struct GameAppInner {
     renderer: Renderer,
     running: bool,
     animation_handle: Option<i32>,
-    last_frame_time: Option<f64>,  // milliseconds
+    last_frame_time: Option<f64>,
     accumulated_time: Duration,
     canvas: web_sys::HtmlCanvasElement,
     dpr: f32,
 }
 
 impl GameAppInner {
-    pub fn new(canvas: web_sys::HtmlCanvasElement, dpr: f32) -> Self {
+    /// 创建游戏实例，每个阶段独立捕获错误
+    pub fn new(canvas: web_sys::HtmlCanvasElement, dpr: f32) -> Result<Self, String> {
         let config = GameConfig::default();
-        let mut renderer = Renderer::new(canvas.clone(), &config).unwrap();
+
+        // 阶段1: 初始化渲染器（WebGL 上下文 + 着色器编译）
+        let renderer = Renderer::new(canvas.clone(), &config).map_err(|e| {
+            format!("渲染器初始化失败: {}", e)
+        })?;
+
         let mut world = World::new();
         let event_bus = EventBus::default();
 
-        // 初始化画布尺寸
+        // 阶段2: 初始化画布尺寸
         let client_width = canvas.client_width() as f32;
         let client_height = canvas.client_height() as f32;
+
+        if client_width == 0.0 || client_height == 0.0 {
+            log::warn!(
+                "Canvas 尺寸异常: {}x{}, DPR: {}",
+                client_width, client_height, dpr
+            );
+        }
+
         renderer.resize(client_width, client_height, dpr);
 
-        // 生成三艘初始飞船
+        // 阶段3: 生成三艘初始飞船
         spawn_ship(&mut world, &config, Vec2::new(20.0, 30.0), Faction::Red);
         spawn_ship(&mut world, &config, Vec2::new(50.0, 30.0), Faction::Green);
         spawn_ship(&mut world, &config, Vec2::new(80.0, 30.0), Faction::Blue);
 
-        Self {
+        log::info!(
+            "游戏初始化完成: canvas={}x{}, dpr={}, 世界={}x{}",
+            client_width, client_height, dpr,
+            config.world_width, config.world_height
+        );
+
+        Ok(Self {
             config,
             world,
             event_bus,
             renderer,
             running: false,
             animation_handle: None,
-            last_frame_time: None,  // Performance.now() milliseconds
+            last_frame_time: None,
             accumulated_time: Duration::ZERO,
             canvas,
             dpr,
-        }
+        })
     }
 
     pub fn start(&mut self) {
@@ -117,21 +137,20 @@ impl GameAppInner {
 
             // 继续下一帧
             let window = web_sys::window().unwrap();
-            app.animation_handle = Some(
-                window.request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref()).unwrap()
-            );
+            let handle = window
+                .request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref())
+                .unwrap();
+            app.animation_handle = Some(handle);
         }) as Box<dyn FnMut(f64)>));
 
         let window = web_sys::window().unwrap();
-        self.animation_handle = Some(
-            window.request_animation_frame(g.borrow().as_ref().unwrap().as_ref().unchecked_ref()).unwrap()
-        );
+        let handle = window
+            .request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref())
+            .unwrap();
+        self.animation_handle = Some(handle);
     }
 
     fn fixed_update(&mut self, dt: Duration) {
-        // 检查并重生死亡的飞船
-        self.respawn_dead_ships(dt);
-
         ai_system(&mut self.world, dt, &self.config);
         weapon_system(&mut self.world, dt, &mut self.event_bus, &self.config);
         movement_system(&mut self.world, dt);
@@ -151,34 +170,13 @@ impl GameAppInner {
 
         let mut explosions = Vec::new();
         for event in self.event_bus.events() {
-            if let GameEvent::Death { position, faction } = event {
+            if let GameEvent::EntityDestroyed { position, faction } = event {
                 explosions.push((*position, *faction));
             }
         }
 
         for (position, faction) in explosions {
-            spawn_explosion(&mut self.world, &position, faction, &self.config);
-        }
-    }
-
-    fn respawn_dead_ships(&mut self, _dt: Duration) {
-        // 收集需要重生的飞船信息
-        let mut to_respawn = Vec::new();
-        for (entity, (health, faction)) in self.world.query::<(&Health, &FactionComponent)>().iter() {
-            if health.is_dead {
-                to_respawn.push((entity, faction.faction));
-            }
-        }
-
-        // 处理重生
-        for (entity, faction) in to_respawn {
-            // 移除旧实体
-            let _ = self.world.despawn(entity);
-
-            // 在随机位置生成新飞船
-            let x = rand_random() * self.config.world_width * 0.8 + self.config.world_width * 0.1;
-            let y = rand_random() * self.config.world_height * 0.8 + self.config.world_height * 0.1;
-            spawn_ship(&mut self.world, &self.config, Vec2::new(x, y), faction);
+            spawn_explosion(&mut self.world, &self.config, position, *faction);
         }
     }
 
@@ -213,33 +211,41 @@ pub fn spawn_ship(world: &mut World, config: &GameConfig, position: Vec2, factio
         max_speed: config.ship_max_speed,
     };
 
-    let health = Health::new(config.ship_max_health);
+    let health = Health {
+        current: config.ship_max_health,
+        max: config.ship_max_health,
+        is_dead: false,
+    };
+
     let faction_component = FactionComponent { faction };
-    let weapon = Weapon::from_config(config);
+
     let collider = Collider {
-        radius: config.ship_size / 1.5,
+        radius: config.ship_size * 0.5,
         layer: CollisionLayer::Ship,
     };
-    let renderable = Renderable {
-        color: faction.to_color(),
-        layer: RenderLayer::Ship,
-        visible: true,
-    };
+
+    let weapon = Weapon::from_config(config);
     let ai_state = AiState::default();
+
+    let color = faction.color();
+
+    let renderable = Renderable {
+        color,
+        shape: RenderShape::Ship,
+    };
 
     world.spawn((
         transform,
         velocity,
         health,
         faction_component,
-        weapon,
         collider,
-        renderable,
+        weapon,
         ai_state,
+        renderable,
     ));
 }
 
-/// 简单的随机数生成（WASM环境）
 fn rand_random() -> f32 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()

@@ -7,14 +7,70 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#000000">
-  <title>几何飞船观战战斗</title>
-  <!-- 引入全屏样式 -->
-  <link rel="stylesheet" href="src/style.css">
+  <title>ConwayDuel</title>
+  <link data-trunk rel="css" href="src/style.css">
+
+  <!-- 内联诊断：在 WASM 加载前就能捕获问题 -->
+  <script>
+  (function() {
+    var _diagStart = Date.now();
+    var _diagLines = [];
+
+    function _diag(msg) {
+      var ts = ((Date.now() - _diagStart) / 1000).toFixed(3);
+      var line = "[" + ts + "s] " + msg;
+      _diagLines.push(line);
+      try { console.log(line); } catch(e) {}
+    }
+
+    _diag("HTML 解析开始");
+    _diag("UA: " + navigator.userAgent);
+    _diag("协议: " + location.protocol);
+    _diag("屏幕: " + screen.width + "x" + screen.height);
+
+    // 检测关键 API 可用性
+    var apis = ["WebAssembly", "WebGL2", "ResizeObserver", "Promise", "fetch", "performance"];
+    apis.forEach(function(api) {
+      var ok = false;
+      if (api === "WebAssembly") ok = typeof WebAssembly !== "undefined";
+      else if (api === "WebGL2") {
+        try {
+          var c = document.createElement("canvas");
+          ok = !!c.getContext("webgl2");
+        } catch(e) { ok = false; }
+      }
+      else if (api === "ResizeObserver") ok = typeof ResizeObserver !== "undefined";
+      else ok = typeof window[api.toLowerCase()] !== "undefined";
+      _diag(api + ": " + (ok ? "OK" : "MISSING"));
+    });
+
+    // 如果关键 API 缺失，立即弹窗
+    var missing = [];
+    if (typeof WebAssembly === "undefined") missing.push("WebAssembly");
+    try {
+      var tc = document.createElement("canvas");
+      if (!tc.getContext("webgl2") && !tc.getContext("webgl")) missing.push("WebGL");
+    } catch(e) { missing.push("WebGL"); }
+
+    if (missing.length > 0) {
+      var msg = "当前浏览器缺少必要功能: " + missing.join(", ");
+      _diag("致命: " + msg);
+      alert(msg + "\n\n请使用 Chrome / Firefox / Edge 等现代浏览器。");
+    }
+
+    // 全局错误兜底（在 main.ts 加载前生效）
+    window.addEventListener("error", function(e) {
+      _diag("[早期全局错误] " + (e.message || e) + " @ " + (e.filename || "") + ":" + (e.lineno || ""));
+    });
+
+    // 暴露给 main.ts 使用
+    window.__diagLines = _diagLines;
+    window.__diagStart = _diagStart;
+  })();
+  </script>
 </head>
 <body>
-  <!-- 全屏画布，唯一DOM元素，无冗余节点 -->
   <canvas id="game-canvas"></canvas>
-  <!-- Trunk 会自动注入Wasm模块和TS代码 -->
-  <script type="module" src="src/main.ts"></script>
+  <!-- Trunk 会自动注入 WASM 加载脚本 -->
 </body>
 </html>

@@ -18,10 +18,16 @@ pub struct GameApp {
 
 #[wasm_bindgen]
 impl GameApp {
+    /// 创建游戏实例，失败时返回 JS 错误（含详细诊断信息）
     #[wasm_bindgen(constructor)]
-    pub fn new(canvas: web_sys::HtmlCanvasElement, dpr: f32) -> Self {
-        Self {
-            inner: app::GameAppInner::new(canvas, dpr),
+    pub fn new(canvas: web_sys::HtmlCanvasElement, dpr: f32) -> Result<GameApp, JsValue> {
+        match app::GameAppInner::new(canvas, dpr) {
+            Ok(inner) => Ok(GameApp { inner }),
+            Err(e) => Err(JsValue::from_str(&format!(
+                "[Rust] 游戏初始化失败: {}\n\
+                 请将此信息连同浏览器控制台日志一起反馈。",
+                e
+            ))),
         }
     }
 

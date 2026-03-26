@@ -39,9 +39,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Install Trunk
-        uses: jetli/trunk-action@v0.5
-        with:
-          version: "latest"
+        run: cargo install trunk --locked
 
       - name: Build
         run: trunk build --release --public-url "/ConwayDuel/"

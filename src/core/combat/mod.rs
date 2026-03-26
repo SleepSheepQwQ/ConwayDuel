@@ -14,54 +14,70 @@ pub fn weapon_system(
 ) {
     let dt_secs = dt.as_secs_f32();
 
-    for (entity, (transform, ship, weapon, ai)) in
-        world.query_mut::<(&Transform, &Ship, &mut Weapon, &AiState)>()
-    {
-        weapon.remaining_cooldown = weapon.remaining_cooldown.saturating_sub(dt);
+    // 收集需要发射的子弹信息
+    let mut fire_actions: Vec<(hecs::Entity, Transform, Ship)> = Vec::new();
 
+    for (entity, (transform, ship, weapon, ai)) in
+        world.query::<(&Transform, &Ship, &mut Weapon, &AiState)>().iter()
+    {
         let should_fire = ai.current_state == AiBehaviorState::Attacking
             && weapon.remaining_cooldown.is_zero()
             && ai.target.is_some();
 
         if should_fire {
-            weapon.remaining_cooldown = weapon.cooldown;
-
-            let direction = Vec2::new(transform.rotation.cos(), transform.rotation.sin());
-            let bullet_speed = config.ship_max_speed * config.bullet_speed_multiplier;
-            let bullet_pos = transform.position + direction * config.ship_size;
-
-            world.spawn((
-                Transform {
-                    position: bullet_pos,
-                    rotation: transform.rotation,
-                    scale: Vec2::ONE,
-                },
-                Velocity {
-                    linear: direction * bullet_speed,
-                    angular: 0.0,
-                },
-                Bullet {
-                    shooter: entity,
-                    lifetime: Duration::from_secs_f32(config.bullet_lifetime),
-                    damage: config.bullet_damage,
-                },
-                Collider {
-                    radius: config.bullet_size * 0.5,
-                    layer: CollisionLayer::Bullet,
-                },
-                Renderable {
-                    color: ship.faction.to_color(),
-                    layer: RenderLayer::Bullet,
-                    visible: true,
-                },
-            ));
+            fire_actions.push((entity, *transform, *ship));
         }
+    }
+
+    // 更新冷却时间
+    for (_entity, (_transform, _ship, mut weapon, _ai)) in
+        world.query_mut::<(&Transform, &Ship, &mut Weapon, &AiState)>()
+    {
+        weapon.remaining_cooldown = weapon.remaining_cooldown.saturating_sub(dt);
+    }
+
+    // 发射子弹
+    for (_entity, transform, ship) in fire_actions {
+        // 重置冷却
+        if let Ok(mut weapon) = world.get::<&mut Weapon>(_entity) {
+            weapon.remaining_cooldown = weapon.cooldown;
+        }
+
+        let direction = Vec2::new(transform.rotation.cos(), transform.rotation.sin());
+        let bullet_speed = config.ship_max_speed * config.bullet_speed_multiplier;
+        let bullet_pos = transform.position + direction * config.ship_size;
+
+        world.spawn((
+            Transform {
+                position: bullet_pos,
+                rotation: transform.rotation,
+                scale: Vec2::ONE,
+            },
+            Velocity {
+                linear: direction * bullet_speed,
+                angular: 0.0,
+            },
+            Bullet {
+                shooter: _entity,
+                lifetime: Duration::from_secs_f32(config.bullet_lifetime),
+                damage: config.bullet_damage,
+            },
+            Collider {
+                radius: config.bullet_size * 0.5,
+                layer: CollisionLayer::Bullet,
+            },
+            Renderable {
+                color: ship.faction.to_color(),
+                layer: RenderLayer::Bullet,
+                visible: true,
+            },
+        ));
     }
 }
 
-pub fn damage_system(world: &mut World, events: &EventBus) {
+pub fn damage_system(world: &mut World, events: &mut EventBus) {
     let mut to_remove: Vec<hecs::Entity> = Vec::new();
-    let mut to_despawn: Vec<hecs::Entity> = Vec::new();
+    let mut deaths: Vec<(Vec2, Faction)> = Vec::new();
 
     for event in events.events() {
         if let GameEvent::Collision { entity_a, entity_b } = event {
@@ -100,27 +116,24 @@ pub fn damage_system(world: &mut World, events: &EventBus) {
             to_remove.push(bullet_entity);
 
             if should_die {
-                let (faction, position) = if let Ok(ship) = world.get::<&Ship>(ship_entity) {
-                    let faction = ship.faction;
-                    let position = if let Ok(t) = world.get::<&Transform>(ship_entity) {
-                        t.position
-                    } else {
-                        continue;
-                    };
-                    (faction, position)
+                let faction = if let Ok(ship) = world.get::<&Ship>(ship_entity) {
+                    ship.faction
+                } else {
+                    continue;
+                };
+
+                let position = if let Ok(t) = world.get::<&Transform>(ship_entity) {
+                    t.position
                 } else {
                     continue;
                 };
 
                 world.despawn(ship_entity).ok();
+                world.spawn((RespawnTimer::new(Duration::from_secs_f32(3.0)),));
 
-                world.spawn((
-                    RespawnTimer::new(Duration::from_secs_f32(3.0)),
-                ));
+                deaths.push((position, faction));
 
                 let color = faction.to_color();
-                events.push(GameEvent::Death { position, faction });
-
                 world.spawn((
                     Transform {
                         position,
@@ -146,8 +159,9 @@ pub fn damage_system(world: &mut World, events: &EventBus) {
     for entity in to_remove {
         world.despawn(entity).ok();
     }
-    for entity in to_despawn {
-        world.despawn(entity).ok();
+
+    for (position, faction) in deaths {
+        events.push(GameEvent::Death { position, faction });
     }
 }
 

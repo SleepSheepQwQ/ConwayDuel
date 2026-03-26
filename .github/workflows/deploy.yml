@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -14,11 +14,13 @@ concurrency:
   group: "pages"
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,18 +30,39 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Cache Cargo
+      - name: Cache Cargo Registry
         uses: actions/cache@v4
+        id: cache-cargo-registry
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Target Directory
+        uses: actions/cache@v4
+        id: cache-target
+        with:
+          path: target
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}-${{ hashFiles('src/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}-
+            ${{ runner.os }}-target-
+
+      - name: Cache Trunk
+        uses: actions/cache@v4
+        id: cache-trunk
+        with:
+          path: ~/.cargo/bin/trunk
+          key: ${{ runner.os }}-trunk-0.21.0
+          restore-keys: |
+            ${{ runner.os }}-trunk-
 
       - name: Install Trunk
-        run: cargo install trunk --locked
+        if: steps.cache-trunk.outputs.cache-hit != 'true'
+        run: cargo install trunk --version 0.21.0 --locked
 
       - name: Build
         run: trunk build --release --public-url "/ConwayDuel/"

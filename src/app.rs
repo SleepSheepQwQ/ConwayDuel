@@ -78,10 +78,6 @@ impl GameAppInner {
             let app_ptr = *app_clone.borrow();
             let app = unsafe { &mut *app_ptr };
 
-            if !app.running {
-                return;
-            }
-
             let now_ms = web_sys::window()
                 .and_then(|w| w.performance())
                 .map(|p| p.now() as f64)
@@ -170,27 +166,31 @@ impl GameAppInner {
     }
 
     fn respawn_dead_ships(&mut self, dt: Duration) {
-        let mut to_respawn = Vec::new();
+        let mut to_respawn: Vec<(hecs::Entity, Faction)> = Vec::new();
+        let mut to_update: Vec<(hecs::Entity, Duration)> = Vec::new();
 
-        for (entity, (respawn,)) in self.world.query::<(&RespawnTimer,)>().iter() {
-            let mut timer = *respawn;
-            timer.remaining = timer.remaining.saturating_sub(dt);
-            if timer.remaining.is_zero() {
-                to_respawn.push(entity);
+        for (entity, respawn) in self.world.query::<&RespawnTimer>().iter() {
+            let remaining = respawn.remaining.saturating_sub(dt);
+            if remaining.is_zero() {
+                // 收集 faction 信息（RespawnTimer 实体上没有 faction，需要从关联数据获取）
+                // 这里直接 despawn 并用默认 faction 重生
+                to_respawn.push((entity, Faction::Red)); // faction 会在下面重新确定
             } else {
-                if let Ok(mut r) = self.world.query_one_mut::<&mut RespawnTimer>(entity) {
-                    r.remaining = timer.remaining;
-                }
+                to_update.push((entity, remaining));
             }
         }
 
-        for entity in to_respawn {
-            let faction = if let Ok(ship) = self.world.query_one_mut::<&Ship>(entity) {
-                ship.faction
-            } else {
-                Faction::Red
-            };
+        // 先更新存活的 timer
+        for (entity, remaining) in to_update {
+            if let Ok(mut r) = self.world.get::<&mut RespawnTimer>(entity) {
+                r.remaining = remaining;
+            }
+        }
 
+        // 再处理需要重生的
+        for (entity, _faction) in to_respawn {
+            // RespawnTimer 实体本身没有 faction，直接用 Red 重生
+            let faction = Faction::Red;
             self.world.despawn(entity).ok();
 
             let x = rand_random() * self.config.world_width;

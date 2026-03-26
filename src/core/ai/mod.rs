@@ -13,11 +13,13 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
         ship_infos.push((entity, *transform, *ship, *ai));
     }
 
+    let mut updates: Vec<(hecs::Entity, Vec2, f32, AiState)> = Vec::new();
+
     for (entity, _transform, ship, ai_state) in &ship_infos {
         let mut nearest_enemy: Option<(hecs::Entity, f32, Vec2)> = None;
 
         for (other_entity, other_transform, other_ship, _) in &ship_infos {
-            if other_entity == entity {
+            if *other_entity == *entity {
                 continue;
             }
             if !ship.faction.is_enemy(&other_ship.faction) {
@@ -32,9 +34,9 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
             }
         }
 
-        let mut new_state = *ai_state;
         let mut target_velocity = Vec2::ZERO;
         let mut target_angular = 0.0;
+        let mut new_state = *ai_state;
 
         match nearest_enemy {
             Some((enemy_entity, dist, enemy_pos)) => {
@@ -43,7 +45,10 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
                 if ship.health / ship.max_health < config.ai_flee_threshold {
                     new_state.current_state = AiBehaviorState::Retreating;
                     target_velocity = -direction * config.ship_max_speed * 0.8;
-                } else if dist < 10.0 {
+                    let target_angle = (-direction.y).atan2(-direction.x);
+                    let angle_diff = target_angle - _transform.rotation;
+                    target_angular = angle_diff * config.ship_turn_speed;
+                } else if dist < config.ai_attack_range {
                     new_state.current_state = AiBehaviorState::Attacking;
                     new_state.target = Some(enemy_entity);
 
@@ -54,31 +59,40 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
                     if dist < 5.0 {
                         target_velocity = -direction * config.ship_max_speed * 0.5;
                     } else {
-                        target_velocity = direction * config.ship_max_speed * 0.3;
+                        target_velocity = direction * config.ship_max_speed * 0.6;
                     }
                 } else {
                     new_state.current_state = AiBehaviorState::Chasing;
                     new_state.target = Some(enemy_entity);
+                    target_velocity = direction * config.ship_max_speed * 0.8;
 
                     let target_angle = direction.y.atan2(direction.x);
                     let angle_diff = target_angle - _transform.rotation;
                     target_angular = angle_diff * config.ship_turn_speed;
-                    target_velocity = direction * config.ship_max_speed;
                 }
             }
             None => {
                 new_state.current_state = AiBehaviorState::Idle;
-                target_velocity = Vec2::new(
-                    (entity.id() as f32 * 1.7).sin() * config.ship_max_speed * 0.3,
-                    (entity.id() as f32 * 2.3).cos() * config.ship_max_speed * 0.3,
-                );
+                new_state.target = None;
+                target_velocity = Vec2::ZERO;
+                target_angular = 0.0;
             }
         }
 
-        if let Ok((velocity, ai)) = world.query_one_mut::<(&mut Velocity, &mut AiState)>(entity) {
+        updates.push((*entity, target_velocity, target_angular, new_state));
+    }
+
+    for (entity, target_velocity, target_angular, new_state) in updates {
+        if let Ok(velocity) = world.get::<&Velocity>(entity) {
             let lerp_factor = 1.0 - (-config.ai_aggressiveness * dt_secs * 5.0).exp();
-            velocity.linear = velocity.linear.lerp(target_velocity, lerp_factor);
-            velocity.angular = velocity.angular.lerp(target_angular, lerp_factor);
+            let new_linear = velocity.linear + (target_velocity - velocity.linear) * lerp_factor;
+            let new_angular = velocity.angular + (target_angular - velocity.angular) * lerp_factor;
+            if let Ok(mut v) = world.get::<&mut Velocity>(entity) {
+                v.linear = new_linear;
+                v.angular = new_angular;
+            }
+        }
+        if let Ok(mut ai) = world.get::<&mut AiState>(entity) {
             *ai = new_state;
         }
     }

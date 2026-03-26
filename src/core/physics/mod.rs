@@ -14,7 +14,7 @@ pub fn movement_system(world: &mut World, dt: Duration) {
     }
 }
 
-pub fn boundary_system(world: &mut World, events: &mut EventBus, config: &GameConfig) {
+pub fn boundary_system(world: &mut World, _events: &mut EventBus, config: &GameConfig) {
     let w = config.world_width;
     let h = config.world_height;
 

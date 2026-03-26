@@ -1,6 +1,6 @@
 # ConwayDuel
 
-基于 Rust/WASM + WebGL2 的三阵营太空对战游戏。
+基于 Rust/WASM + WebGL2 的三阵营太空对战游戏
 
 ## 快速开始
 

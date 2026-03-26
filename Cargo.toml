@@ -8,17 +8,23 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 wasm-bindgen = "0.2.92"
-web-sys = { version = "0.3.69", features = ["Window", "Document", "HtmlCanvasElement", "WebGl2RenderingContext", "Performance", "ResizeObserver"] }
-hecs = "0.10.0"
-glam = "0.25.0"
-glow = "0.13.1"
 console_error_panic_hook = "0.1.7"
-log = "0.4.21"
 wasm-logger = "0.2.0"
-serde = { version = "1.0.197", features = ["derive"] }
+glam = { version = "0.25", features = ["bytemuck"] }
+hecs = "0.10"
+glow = "0.13"
+serde = { version = "1.0", features = ["derive"] }
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+  "HtmlCanvasElement",
+  "WebGl2RenderingContext",
+  "Window",
+  "Performance",
+  "Document",
+  "ResizeObserver",
+  "ResizeObserverEntry",
+] }
 
 [profile.release]
-opt-level = 3
+opt-level = "s"
 lto = true
-codegen-units = 1
-panic = "abort"

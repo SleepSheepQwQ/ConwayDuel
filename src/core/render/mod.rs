@@ -7,40 +7,42 @@ use wasm_bindgen::JsCast;
 use crate::config::GameConfig;
 use crate::ecs::components::*;
 
-// 基础几何渲染顶点着色器
 const BASIC_VERT: &str = r#"
     #version 300 es
     precision highp float;
 
     layout (location = 0) in vec2 a_position;
     uniform mat4 u_view_proj;
-    uniform vec2 u_offset;
-    uniform float u_scale;
-    uniform vec4 u_color;
-
-    out vec4 v_color;
+    uniform vec2 u_translation;
+    uniform float u_rotation;
+    uniform vec2 u_scale;
+    uniform float u_aspect;
 
     void main() {
-        vec2 pos = a_position * u_scale + u_offset;
-        gl_Position = u_view_proj * vec4(pos, 0.0, 1.0);
-        v_color = u_color;
+        float c = cos(u_rotation);
+        float s = sin(u_rotation);
+        vec2 rotated = vec2(
+            a_position.x * c - a_position.y * s,
+            a_position.x * s + a_position.y * c
+        );
+        rotated *= u_scale;
+        rotated += u_translation;
+        gl_Position = u_view_proj * vec4(rotated, 0.0, 1.0);
     }
 "#;
 
-// 基础纯色渲染片段着色器
 const BASIC_FRAG: &str = r#"
     #version 300 es
     precision highp float;
 
-    in vec4 v_color;
+    uniform vec4 u_color;
     out vec4 out_color;
 
     void main() {
-        out_color = v_color;
+        out_color = u_color;
     }
 "#;
 
-// 高斯模糊顶点着色器（背景特效用）
 const GAUSSIAN_BLUR_VERT: &str = r#"
     #version 300 es
     precision highp float;
@@ -54,7 +56,6 @@ const GAUSSIAN_BLUR_VERT: &str = r#"
     }
 "#;
 
-// 高斯模糊片段着色器
 const GAUSSIAN_BLUR_FRAG: &str = r#"
     #version 300 es
     precision highp float;
@@ -82,158 +83,187 @@ const GAUSSIAN_BLUR_FRAG: &str = r#"
     }
 "#;
 
-// 渲染器核心结构体
 pub struct Renderer {
     gl: glow::Context,
     canvas: web_sys::HtmlCanvasElement,
-    // 着色器程序
     basic_program: glow::Program,
     blur_program: glow::Program,
-    // 顶点缓冲区
     quad_vao: glow::VertexArray,
     quad_vbo: glow::Buffer,
-    // 飞船等腰三角形顶点数据
     ship_vertices: Vec<Vec2>,
-    // 高斯模糊帧缓冲区
     blur_fbo: glow::Framebuffer,
     blur_texture: glow::Texture,
-    // 渲染状态
-    screen_width: i32,
-    screen_height: i32,
-    config: GameConfig,
-    // 相机视图投影矩阵
+    screen_width: f32,
+    screen_height: f32,
     view_proj: Mat4,
-    // 星云数据
-    nebula_positions: Vec<Vec2>,
-    // WebGL上下文丢失标记
-    context_lost: bool,
+    config: GameConfig,
 }
 
 impl Renderer {
-    // 初始化渲染器，创建WebGL上下文、编译着色器
     pub fn new(canvas: web_sys::HtmlCanvasElement, config: &GameConfig) -> Result<Self, String> {
-        // 获取WebGL2上下文，兼容安卓99%以上设备
-        let gl = canvas
-            .get_context("webgl2")
-            .map_err(|_| "无法获取WebGL2上下文".to_string())?
-            .ok_or("当前设备不支持WebGL2".to_string())?
-            .dyn_into::<web_sys::WebGl2RenderingContext>()
-            .map_err(|_| "WebGL2上下文类型转换失败".to_string())?;
+        let gl = unsafe {
+            glow::Context::from_webgl2_context(
+                canvas
+                    .get_context("webgl2")
+                    .ok_or_else(|| "无法获取 WebGL2 上下文".to_string())?
+                    .dyn_into::<web_sys::WebGl2RenderingContext>()
+                    .map_err(|_| "WebGL2 上下文类型转换失败".to_string())?,
+            )
+        };
 
-        let gl = glow::Context::from_webgl2_context(gl);
+        let basic_program = unsafe { Self::create_program(&gl, BASIC_VERT, BASIC_FRAG)? };
+        let blur_program = unsafe { Self::create_program(&gl, GAUSSIAN_BLUR_VERT, GAUSSIAN_BLUR_FRAG)? };
 
-        // 编译着色器程序
-        let basic_program = compile_program(&gl, BASIC_VERT, BASIC_FRAG)?;
-        let blur_program = compile_program(&gl, GAUSSIAN_BLUR_VERT, GAUSSIAN_BLUR_FRAG)?;
-
-        // 创建全屏四边形VAO（用于模糊渲染）
-        let quad_vertices: [f32; 12] = [
-            -1.0, -1.0, 1.0, -1.0, 1.0, 1.0,
-            -1.0, -1.0, 1.0, 1.0, -1.0, 1.0,
+        let quad_vertices: [f32; 8] = [
+            -1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0,
         ];
-
+        let quad_vao = unsafe { gl.create_vertex_array().ok_or("创建 VAO 失败")? };
+        let quad_vbo = unsafe { gl.create_buffer().ok_or("创建 VBO 失败")? };
         unsafe {
-            let quad_vao = gl.create_vertex_array()?;
-            let quad_vbo = gl.create_buffer()?;
-
             gl.bind_vertex_array(Some(quad_vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(quad_vbo));
-            gl.buffer_data_u8_slice(
+            gl.buffer_data_size(
                 glow::ARRAY_BUFFER,
-                &quad_vertices.align_to::<u8>().1,
+                mem::size_of::<[f32; 8]>() as i32,
                 glow::STATIC_DRAW,
             );
-
-            gl.vertex_attrib_pointer_f32(
+            gl.buffer_sub_data_u8_slice(
+                glow::ARRAY_BUFFER,
                 0,
-                2,
-                glow::FLOAT,
-                false,
-                2 * mem::size_of::<f32>() as i32,
-                0,
+                bytemuck::cast_slice(&quad_vertices),
             );
             gl.enable_vertex_attrib_array(0);
-
+            gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 0, 0);
             gl.bind_vertex_array(None);
-            gl.bind_buffer(glow::ARRAY_BUFFER, None);
-
-            // 创建模糊帧缓冲区和纹理
-            let blur_fbo = gl.create_framebuffer()?;
-            let blur_texture = gl.create_texture()?;
-
-            // 生成等腰三角形飞船顶点（纸飞机样式，机头朝前）
-            let ship_size = config.ship_size;
-            let ship_vertices = vec![
-                Vec2::new(ship_size, 0.0),         // 机头
-                Vec2::new(-ship_size / 2.0, ship_size / 2.0), // 机尾左上
-                Vec2::new(-ship_size / 2.0, -ship_size / 2.0), // 机尾左下
-            ];
-
-            // 启用混合，处理透明度
-            gl.enable(glow::BLEND);
-            gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
-            // 禁用深度测试，2D渲染不需要
-            gl.disable(glow::DEPTH_TEST);
-
-            // 初始化相机矩阵
-            let view_proj = Mat4::orthographic_rh_gl(
-                0.0,
-                config.world_width,
-                0.0,
-                config.world_height,
-                -1.0,
-                1.0,
-            );
-
-            // 生成星云位置
-            let mut nebula_positions = Vec::new();
-            for i in 0..config.nebula_count {
-                let x = ((i * 17 + 31) % 100) as f32 / 100.0 * config.world_width;
-                let y = ((i * 23 + 47) % 100) as f32 / 100.0 * config.world_height;
-                nebula_positions.push(Vec2::new(x, y));
-            }
-
-            Ok(Self {
-                gl,
-                canvas,
-                basic_program,
-                blur_program,
-                quad_vao,
-                quad_vbo,
-                ship_vertices,
-                blur_fbo,
-                blur_texture,
-                screen_width: 0,
-                screen_height: 0,
-                config: config.clone(),
-                view_proj,
-                nebula_positions,
-                context_lost: false,
-            })
         }
+
+        let blur_fbo = unsafe { gl.create_framebuffer().ok_or("创建 FBO 失败")? };
+        let blur_texture = unsafe { gl.create_texture().ok_or("创建纹理失败")? };
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(blur_texture));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA as i32,
+                1,
+                1,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                None,
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(blur_fbo));
+            gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                glow::TEXTURE_2D,
+                Some(blur_texture),
+                0,
+            );
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.bind_texture(glow::TEXTURE_2D, None);
+        }
+
+        let ship_vertices = vec![
+            Vec2::new(0.0, 1.0),
+            Vec2::new(-0.6, -0.5),
+            Vec2::new(0.6, -0.5),
+        ];
+
+        let screen_width = canvas.client_width() as f32;
+        let screen_height = canvas.client_height() as f32;
+
+        let view_proj = Mat4::orthographic_rh_gl(
+            0.0,
+            config.world_width,
+            0.0,
+            config.world_height,
+            -1.0,
+            1.0,
+        );
+
+        Ok(Self {
+            gl,
+            canvas,
+            basic_program,
+            blur_program,
+            quad_vao,
+            quad_vbo,
+            ship_vertices,
+            blur_fbo,
+            blur_texture,
+            screen_width,
+            screen_height,
+            view_proj,
+            config: config.clone(),
+        })
     }
 
-    // 屏幕尺寸变化时更新，适配安卓旋转屏幕
+    unsafe fn create_program(
+        gl: &glow::Context,
+        vert_src: &str,
+        frag_src: &str,
+    ) -> Result<glow::Program, String> {
+        let vert = Self::compile_shader(gl, glow::VERTEX_SHADER, vert_src)?;
+        let frag = Self::compile_shader(gl, glow::FRAGMENT_SHADER, frag_src)?;
+
+        let program = gl.create_program().ok_or("创建着色器程序失败")?;
+        gl.attach_shader(program, vert);
+        gl.attach_shader(program, frag);
+        gl.link_program(program);
+
+        if !gl.get_program_link_status(program) {
+            let log = gl.get_program_info_log(program);
+            gl.delete_program(program);
+            gl.delete_shader(vert);
+            gl.delete_shader(frag);
+            return Err(format!("着色器链接失败: {}", log));
+        }
+
+        gl.delete_shader(vert);
+        gl.delete_shader(frag);
+        Ok(program)
+    }
+
+    unsafe fn compile_shader(
+        gl: &glow::Context,
+        shader_type: u32,
+        source: &str,
+    ) -> Result<glow::Shader, String> {
+        let shader = gl.create_shader(shader_type).ok_or("创建着色器失败")?;
+        gl.shader_source(shader, source);
+        gl.compile_shader(shader);
+
+        if !gl.get_shader_compile_status(shader) {
+            let log = gl.get_shader_info_log(shader);
+            gl.delete_shader(shader);
+            return Err(format!("着色器编译失败: {}", log));
+        }
+
+        Ok(shader)
+    }
+
     pub fn resize(&mut self, width: f32, height: f32, dpr: f32) {
         let physical_width = (width * dpr) as i32;
         let physical_height = (height * dpr) as i32;
 
-        if self.screen_width == physical_width && self.screen_height == physical_height {
+        if physical_width == self.screen_width as i32 && physical_height == self.screen_height as i32 {
             return;
         }
 
-        self.screen_width = physical_width;
-        self.screen_height = physical_height;
+        self.screen_width = physical_width as f32;
+        self.screen_height = physical_height as f32;
 
-        // 更新画布尺寸
         self.canvas.set_width(physical_width as u32);
         self.canvas.set_height(physical_height as u32);
 
-        // 更新视口
         unsafe {
             self.gl.viewport(0, 0, physical_width, physical_height);
 
-            // 更新模糊纹理尺寸
             self.gl.bind_texture(glow::TEXTURE_2D, Some(self.blur_texture));
             self.gl.tex_image_2d(
                 glow::TEXTURE_2D,
@@ -246,20 +276,11 @@ impl Renderer {
                 glow::UNSIGNED_BYTE,
                 None,
             );
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MIN_FILTER,
-                glow::LINEAR as i32,
-            );
-            self.gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MAG_FILTER,
-                glow::LINEAR as i32,
-            );
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            self.gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
             self.gl.bind_texture(glow::TEXTURE_2D, None);
         }
 
-        // 更新相机投影矩阵，适配屏幕宽高比
         let world_width = self.config.world_width;
         let world_height = self.config.world_height;
         let screen_aspect = width / height;
@@ -281,307 +302,183 @@ impl Renderer {
         );
     }
 
-    // 主渲染入口，按层级渲染所有游戏内容
     pub fn render(&mut self, world: &World, config: &GameConfig) {
-        // 检查WebGL上下文是否丢失
-        if self.context_lost {
+        let is_context_lost = self
+            .canvas
+            .get_context("webgl2")
+            .and_then(|ctx| {
+                ctx.dyn_into::<web_sys::WebGl2RenderingContext>().ok()
+            })
+            .map(|gl| gl.is_context_lost())
+            .unwrap_or(true);
+
+        if is_context_lost {
             return;
         }
 
         unsafe {
-            // 清空画布为深蓝色背景
-            self.gl.clear_color(0.02, 0.02, 0.08, 1.0);
+            self.gl.clear_color(0.02, 0.02, 0.06, 1.0);
             self.gl.clear(glow::COLOR_BUFFER_BIT);
 
-            // 渲染背景星云
-            self.render_nebula();
+            self.gl.use_program(Some(self.basic_program));
 
-            // 渲染战场边界
+            let view_proj_ptr = self.gl.get_uniform_location(self.basic_program, "u_view_proj").as_ref();
+            self.gl.uniform_matrix_4_f32_slice(view_proj_ptr, false, &self.view_proj.to_cols_array());
+
+            for layer in [RenderLayer::Bullet, RenderLayer::Ship, RenderLayer::Effect] {
+                for (_entity, (transform, renderable)) in
+                    world.query::<(&Transform, &Renderable)>().iter()
+                {
+                    if !renderable.visible || renderable.layer != layer {
+                        continue;
+                    }
+
+                    let has_bullet = world.get::<&Bullet>(_entity).is_ok();
+                    let has_ship = world.get::<&Ship>(_entity).is_ok();
+                    let has_effect = world.get::<&Effect>(_entity).is_ok();
+
+                    if has_bullet {
+                        self.render_bullet(transform, renderable);
+                    } else if has_ship {
+                        self.render_ship(transform, renderable);
+                    } else if has_effect {
+                        self.render_effect(transform, renderable);
+                    }
+                }
+            }
+
             self.render_boundary(config);
 
-            // 收集所有可渲染实体，按层级排序
-            // 使用 into_iter() 避免生命周期问题
-            let mut renderables: Vec<(hecs::Entity, Transform, Renderable)> = Vec::new();
-            for (entity, (transform, renderable)) in world.query::<(&Transform, &Renderable)>().into_iter() {
-                if !renderable.visible {
-                    continue;
-                }
-                renderables.push((entity, *transform, *renderable));
-            }
-
-            // 按渲染层级从后往前渲染，保证层级正确
-            renderables.sort_by_key(|(_, _, r)| r.layer);
-
-            // 遍历渲染所有实体
-            for (entity, transform, renderable) in renderables {
-                // 渲染飞船
-                if world.query_one::<&FactionComponent>(entity).ok().is_some() {
-                    self.render_ship(&transform, &renderable);
-                }
-                // 渲染子弹
-                else if world.query_one::<&Bullet>(entity).ok().is_some() {
-                    self.render_bullet(&transform, &renderable);
-                }
-                // 渲染爆炸特效
-                else if let Some(effect) = world.query_one::<&Effect>(entity).ok().and_then(|mut q| q.get().copied()) {
-                    let progress = effect.lifetime.as_secs_f32() / effect.max_lifetime.as_secs_f32();
-                    let current_scale = effect.start_scale + (effect.end_scale - effect.start_scale) * progress;
-                    let mut color = renderable.color;
-                    color[3] = 1.0 - progress; // 淡出效果
-                    self.render_circle(transform.position, current_scale, color);
-                }
-            }
+            self.gl.use_program(None);
         }
     }
 
-    // 渲染背景星云
-    unsafe fn render_nebula(&mut self) {
-        // 先收集位置避免借用冲突
-        let positions: Vec<Vec2> = self.nebula_positions.clone();
-        for pos in positions {
-            let color = [0.1, 0.1, 0.2, 0.3];
-            self.render_circle(pos, 3.0, color);
+    unsafe fn render_ship(&mut self, transform: &Transform, renderable: &Renderable) {
+        let mut vertices: Vec<f32> = Vec::with_capacity(self.ship_vertices.len() * 2);
+        for v in &self.ship_vertices {
+            vertices.push(v.x);
+            vertices.push(v.y);
         }
+
+        let vbo = self.gl.create_buffer().unwrap();
+        self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+        self.gl.buffer_data_u8_slice(
+            glow::ARRAY_BUFFER,
+            bytemuck::cast_slice(&vertices),
+            glow::STATIC_DRAW,
+        );
+        self.gl.enable_vertex_attrib_array(0);
+        self.gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 0, 0);
+
+        let trans_ptr = self.gl.get_uniform_location(self.basic_program, "u_translation").as_ref();
+        self.gl.uniform_2_f32(trans_ptr, transform.position.x, transform.position.y);
+
+        let rot_ptr = self.gl.get_uniform_location(self.basic_program, "u_rotation").as_ref();
+        self.gl.uniform_1_f32(rot_ptr, transform.rotation);
+
+        let scale_ptr = self.gl.get_uniform_location(self.basic_program, "u_scale").as_ref();
+        self.gl.uniform_2_f32(
+            scale_ptr,
+            transform.scale.x * self.config.ship_size,
+            transform.scale.y * self.config.ship_size,
+        );
+
+        let color_ptr = self.gl.get_uniform_location(self.basic_program, "u_color").as_ref();
+        self.gl.uniform_4_f32_slice(color_ptr, &renderable.color);
+
+        self.gl.draw_arrays(glow::TRIANGLES, 0, 3);
+
+        self.gl.delete_buffer(vbo);
+        self.gl.bind_buffer(glow::ARRAY_BUFFER, None);
     }
 
-    // 渲染战场边界
+    unsafe fn render_bullet(&mut self, transform: &Transform, renderable: &Renderable) {
+        self.render_circle(transform.position, transform.scale.x, renderable.color);
+    }
+
+    unsafe fn render_effect(&mut self, transform: &Transform, renderable: &Renderable) {
+        self.render_circle(transform.position, transform.scale.x, renderable.color);
+    }
+
+    unsafe fn render_circle(&mut self, center: Vec2, radius: f32, color: [f32; 4]) {
+        let segments = 16;
+        let mut vertices: Vec<f32> = Vec::with_capacity((segments + 2) * 2);
+
+        vertices.push(center.x);
+        vertices.push(center.y);
+
+        for i in 0..=segments {
+            let angle = (i as f32 / segments as f32) * std::f32::consts::TAU;
+            vertices.push(center.x + radius * angle.cos());
+            vertices.push(center.y + radius * angle.sin());
+        }
+
+        let vbo = self.gl.create_buffer().unwrap();
+        self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+        self.gl.buffer_data_u8_slice(
+            glow::ARRAY_BUFFER,
+            bytemuck::cast_slice(&vertices),
+            glow::STATIC_DRAW,
+        );
+        self.gl.enable_vertex_attrib_array(0);
+        self.gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 0, 0);
+
+        let trans_ptr = self.gl.get_uniform_location(self.basic_program, "u_translation").as_ref();
+        self.gl.uniform_2_f32(trans_ptr, 0.0, 0.0);
+
+        let rot_ptr = self.gl.get_uniform_location(self.basic_program, "u_rotation").as_ref();
+        self.gl.uniform_1_f32(rot_ptr, 0.0);
+
+        let scale_ptr = self.gl.get_uniform_location(self.basic_program, "u_scale").as_ref();
+        self.gl.uniform_2_f32(scale_ptr, 1.0, 1.0);
+
+        let color_ptr = self.gl.get_uniform_location(self.basic_program, "u_color").as_ref();
+        self.gl.uniform_4_f32_slice(color_ptr, &color);
+
+        self.gl.draw_arrays(glow::TRIANGLE_FAN, 0, segments + 2);
+
+        self.gl.delete_buffer(vbo);
+        self.gl.bind_buffer(glow::ARRAY_BUFFER, None);
+    }
+
     unsafe fn render_boundary(&mut self, config: &GameConfig) {
-        let boundary_color = [0.3, 0.3, 0.4, 0.5];
-        let line_width = 0.1;
+        let w = config.world_width;
+        let h = config.world_height;
 
-        // 底部边界
-        self.render_rect(
-            Vec2::new(config.world_width / 2.0, line_width / 2.0),
-            Vec2::new(config.world_width, line_width),
-            boundary_color,
-        );
-        // 顶部边界
-        self.render_rect(
-            Vec2::new(config.world_width / 2.0, config.world_height - line_width / 2.0),
-            Vec2::new(config.world_width, line_width),
-            boundary_color,
-        );
-        // 左侧边界
-        self.render_rect(
-            Vec2::new(line_width / 2.0, config.world_height / 2.0),
-            Vec2::new(line_width, config.world_height),
-            boundary_color,
-        );
-        // 右侧边界
-        self.render_rect(
-            Vec2::new(config.world_width - line_width / 2.0, config.world_height / 2.0),
-            Vec2::new(line_width, config.world_height),
-            boundary_color,
-        );
-    }
-
-    // 渲染矩形
-    unsafe fn render_rect(&mut self, position: Vec2, size: Vec2, color: [f32; 4]) {
-        self.gl.use_program(Some(self.basic_program));
-
-        let vertices = [
-            Vec2::new(-0.5, -0.5),
-            Vec2::new(0.5, -0.5),
-            Vec2::new(0.5, 0.5),
-            Vec2::new(-0.5, -0.5),
-            Vec2::new(0.5, 0.5),
-            Vec2::new(-0.5, 0.5),
+        let vertices: [f32; 8] = [
+            0.0, 0.0,  w, 0.0,  w, h,  0.0, h,
         ];
 
         let vbo = self.gl.create_buffer().unwrap();
         self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
         self.gl.buffer_data_u8_slice(
             glow::ARRAY_BUFFER,
-            &vertices.align_to::<u8>().1,
-            glow::STREAM_DRAW,
+            bytemuck::cast_slice(&vertices),
+            glow::STATIC_DRAW,
         );
-
-        self.gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 2 * mem::size_of::<f32>() as i32, 0);
         self.gl.enable_vertex_attrib_array(0);
+        self.gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 0, 0);
 
-        // 应用缩放
-        let scale_matrix = Mat4::from_scale(size.extend(1.0));
-        let mvp = self.view_proj * Mat4::from_translation(position.extend(0.0)) * scale_matrix;
-        self.gl.uniform_matrix_4_f32_slice(
-            self.gl.get_uniform_location(self.basic_program, "u_view_proj").as_ref(),
-            false,
-            &mvp.to_cols_array(),
-        );
-        self.gl.uniform_2_f32(
-            self.gl.get_uniform_location(self.basic_program, "u_offset").as_ref(),
-            0.0,
-            0.0,
-        );
-        self.gl.uniform_1_f32(
-            self.gl.get_uniform_location(self.basic_program, "u_scale").as_ref(),
-            1.0,
-        );
-        self.gl.uniform_4_f32_slice(
-            self.gl.get_uniform_location(self.basic_program, "u_color").as_ref(),
-            &color,
-        );
+        let trans_ptr = self.gl.get_uniform_location(self.basic_program, "u_translation").as_ref();
+        self.gl.uniform_2_f32(trans_ptr, 0.0, 0.0);
 
-        self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
+        let rot_ptr = self.gl.get_uniform_location(self.basic_program, "u_rotation").as_ref();
+        self.gl.uniform_1_f32(rot_ptr, 0.0);
 
-        self.gl.delete_buffer(vbo);
-        self.gl.bind_buffer(glow::ARRAY_BUFFER, None);
-        self.gl.use_program(None);
-    }
+        let scale_ptr = self.gl.get_uniform_location(self.basic_program, "u_scale").as_ref();
+        self.gl.uniform_2_f32(scale_ptr, 1.0, 1.0);
 
-    // 渲染飞船（等腰三角形纸飞机）
-    unsafe fn render_ship(&mut self, transform: &Transform, renderable: &Renderable) {
-        self.gl.use_program(Some(self.basic_program));
+        let color_ptr = self.gl.get_uniform_location(self.basic_program, "u_color").as_ref();
+        self.gl.uniform_4_f32_slice(color_ptr, &[0.3, 0.3, 0.5, 1.0]);
 
-        // 顶点缓冲区
-        let vbo = self.gl.create_buffer().unwrap();
-        self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-        self.gl.buffer_data_u8_slice(
-            glow::ARRAY_BUFFER,
-            &self.ship_vertices.align_to::<u8>().1,
-            glow::STREAM_DRAW,
-        );
+        self.gl.draw_arrays(glow::LINE_LOOP, 0, 4);
 
-        self.gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 2 * mem::size_of::<f32>() as i32, 0);
-        self.gl.enable_vertex_attrib_array(0);
-
-        // 计算旋转后的MVP矩阵
-        let rotation = Mat4::from_rotation_z(transform.rotation);
-        let model = Mat4::from_translation(transform.position.extend(0.0)) * rotation;
-        let mvp = self.view_proj * model;
-
-        // 设置着色器uniform
-        self.gl.uniform_matrix_4_f32_slice(
-            self.gl.get_uniform_location(self.basic_program, "u_view_proj").as_ref(),
-            false,
-            &mvp.to_cols_array(),
-        );
-        self.gl.uniform_2_f32(
-            self.gl.get_uniform_location(self.basic_program, "u_offset").as_ref(),
-            0.0,
-            0.0,
-        );
-        self.gl.uniform_1_f32(
-            self.gl.get_uniform_location(self.basic_program, "u_scale").as_ref(),
-            1.0,
-        );
-        self.gl.uniform_4_f32_slice(
-            self.gl.get_uniform_location(self.basic_program, "u_color").as_ref(),
-            &renderable.color,
-        );
-
-        // 绘制三角形
-        self.gl.draw_arrays(glow::TRIANGLES, 0, 3);
-
-        // 清理临时资源
-        self.gl.delete_buffer(vbo);
-        self.gl.bind_buffer(glow::ARRAY_BUFFER, None);
-        self.gl.use_program(None);
-    }
-
-    // 渲染子弹（圆形）
-    unsafe fn render_bullet(&mut self, transform: &Transform, renderable: &Renderable) {
-        self.render_circle(transform.position, transform.scale.x, renderable.color);
-    }
-
-    // 通用圆形渲染工具函数
-    unsafe fn render_circle(&mut self, position: Vec2, radius: f32, color: [f32; 4]) {
-        self.gl.use_program(Some(self.basic_program));
-
-        // 生成圆形顶点（16个分段，足够平滑且性能好）
-        let segments = 16;
-        let mut vertices = Vec::with_capacity(segments + 1);
-        vertices.push(Vec2::ZERO); // 圆心
-        for i in 0..=segments {
-            let angle = (i as f32 / segments as f32) * std::f32::consts::TAU;
-            vertices.push(Vec2::new(angle.cos(), angle.sin()));
-        }
-
-        // 顶点缓冲区
-        let vbo = self.gl.create_buffer().unwrap();
-        self.gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-        self.gl.buffer_data_u8_slice(
-            glow::ARRAY_BUFFER,
-            &vertices.align_to::<u8>().1,
-            glow::STREAM_DRAW,
-        );
-
-        self.gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 2 * mem::size_of::<f32>() as i32, 0);
-        self.gl.enable_vertex_attrib_array(0);
-
-        // 设置着色器uniform
-        self.gl.uniform_matrix_4_f32_slice(
-            self.gl.get_uniform_location(self.basic_program, "u_view_proj").as_ref(),
-            false,
-            &self.view_proj.to_cols_array(),
-        );
-        self.gl.uniform_2_f32(
-            self.gl.get_uniform_location(self.basic_program, "u_offset").as_ref(),
-            position.x,
-            position.y,
-        );
-        self.gl.uniform_1_f32(
-            self.gl.get_uniform_location(self.basic_program, "u_scale").as_ref(),
-            radius,
-        );
-        self.gl.uniform_4_f32_slice(
-            self.gl.get_uniform_location(self.basic_program, "u_color").as_ref(),
-            &color,
-        );
-
-        // 绘制扇形
-        self.gl.draw_arrays(glow::TRIANGLE_FAN, 0, vertices.len() as i32);
-
-        // 清理资源
         self.gl.delete_buffer(vbo);
         self.gl.bind_buffer(glow::ARRAY_BUFFER, None);
         self.gl.use_program(None);
     }
 }
 
-// 着色器编译辅助函数
-fn compile_shader(gl: &glow::Context, shader_type: u32, source: &str) -> Result<glow::Shader, String> {
-    unsafe {
-        let shader = gl.create_shader(shader_type)?;
-        gl.shader_source(shader, source);
-        gl.compile_shader(shader);
-
-        if !gl.get_shader_compile_status(shader) {
-            let log = gl.get_shader_info_log(shader);
-            gl.delete_shader(shader);
-            return Err(format!("着色器编译失败: {}", log));
-        }
-
-        Ok(shader)
-    }
-}
-
-// 着色器程序链接辅助函数
-fn compile_program(gl: &glow::Context, vert_source: &str, frag_source: &str) -> Result<glow::Program, String> {
-    unsafe {
-        let vert_shader = compile_shader(gl, glow::VERTEX_SHADER, vert_source)?;
-        let frag_shader = compile_shader(gl, glow::FRAGMENT_SHADER, frag_source)?;
-
-        let program = gl.create_program()?;
-        gl.attach_shader(program, vert_shader);
-        gl.attach_shader(program, frag_shader);
-        gl.link_program(program);
-
-        if !gl.get_program_link_status(program) {
-            let log = gl.get_program_info_log(program);
-            gl.delete_program(program);
-            gl.delete_shader(vert_shader);
-            gl.delete_shader(frag_shader);
-            return Err(format!("程序链接失败: {}", log));
-        }
-
-        gl.delete_shader(vert_shader);
-        gl.delete_shader(frag_shader);
-
-        Ok(program)
-    }
-}
-
-// 资源自动释放，避免WebGL内存泄漏
 impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe {

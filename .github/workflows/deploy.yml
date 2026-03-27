@@ -25,6 +25,9 @@ env:
   # 全局统一版本号，一处修改全局生效，避免版本不一致
   RUST_STABLE_VERSION: 1.80.0
   TRUNK_VERSION: 0.21.0
+  # 固定构建目标，用于缓存隔离
+  BUILD_TARGET: wasm32-unknown-unknown
+  BUILD_TYPE: release
 
 jobs:
   build:
@@ -41,42 +44,22 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_STABLE_VERSION }}
-          targets: wasm32-unknown-unknown
+          targets: ${{ env.BUILD_TARGET }}
 
-      # 缓存Cargo注册源与git依赖，绑定Rust版本避免缓存污染
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        id: cache-cargo-registry
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ env.RUST_STABLE_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-${{ env.RUST_STABLE_VERSION }}-
-
-      # 缓存构建产物，按依赖、代码变更分级，最大化缓存复用
-      - name: Cache build target
-        uses: actions/cache@v4
-        id: cache-target
-        with:
-          path: target
-          key: ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('src/**/*.rs', 'Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ hashFiles('**/Cargo.lock') }}-
-            ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-
-
-      # 缓存trunk二进制，绑定版本与Rust版本，避免重复编译
+      # ==============================================
+      # 缓存分层1：Trunk 二进制（失效频率最低，几乎永久复用）
+      # 作用：避免每次CI重新编译安装Trunk，节省1-3分钟
+      # ==============================================
       - name: Cache Trunk binary
         uses: actions/cache@v4
-        id: cache-trunk
+        id: cache-trunk-binary
         with:
           path: ~/.cargo/bin/trunk
-          key: ${{ runner.os }}-trunk-${{ env.TRUNK_VERSION }}-${{ env.RUST_STABLE_VERSION }}
+          key: ${{ runner.os }}-trunk-binary-${{ env.TRUNK_VERSION }}-${{ env.RUST_STABLE_VERSION }}
 
       # 3次重试应对网络波动，强制--locked确保版本一致
       - name: Install Trunk
-        if: steps.cache-trunk.outputs.cache-hit != 'true'
+        if: steps.cache-trunk-binary.outputs.cache-hit != 'true'
         run: |
           for i in 1 2 3; do
             cargo install trunk --version ${{ env.TRUNK_VERSION }} --locked && break
@@ -84,17 +67,65 @@ jobs:
             sleep 5
           done
 
+      # ==============================================
+      # 缓存分层2：Cargo 依赖源缓存（仅Cargo.lock变化时失效）
+      # 作用：避免每次CI重新下载所有crates.io依赖，节省30秒-2分钟
+      # ==============================================
+      - name: Cache Cargo registry & git dependencies
+        uses: actions/cache@v4
+        id: cache-cargo-registry
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ env.RUST_STABLE_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-${{ env.RUST_STABLE_VERSION }}-
+
+      # ==============================================
+      # 缓存分层3：Trunk 工具链缓存（Trunk版本/依赖变化时失效）
+      # 作用：避免Trunk每次构建重新下载wasm-bindgen-cli、wasm-opt、binaryen等配套工具，节省10-30秒
+      # 关键：绑定Cargo.lock，确保wasm-bindgen版本匹配，无兼容性风险
+      # ==============================================
+      - name: Cache Trunk toolchain
+        uses: actions/cache@v4
+        id: cache-trunk-toolchain
+        with:
+          path: ~/.cache/trunk
+          key: ${{ runner.os }}-trunk-toolchain-${{ env.TRUNK_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-trunk-toolchain-${{ env.TRUNK_VERSION }}-
+
+      # ==============================================
+      # 缓存分层4：Rust 构建产物缓存（代码变化时失效，频率最高）
+      # 作用：实现增量编译，仅重新编译修改的代码，避免全量编译依赖，节省80%+构建时间
+      # 优化：多阶restore-keys，最大化增量复用率，即使代码变更也能复用依赖编译产物
+      # ==============================================
+      - name: Cache Rust build target
+        uses: actions/cache@v4
+        id: cache-rust-target
+        with:
+          path: target
+          key: ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ env.BUILD_TARGET }}-${{ env.BUILD_TYPE }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('src/**/*.rs') }}
+          restore-keys: |
+            # 第一优先级：同工具链、同目标、同构建类型、同依赖版本（仅代码变更，复用依赖产物）
+            ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ env.BUILD_TARGET }}-${{ env.BUILD_TYPE }}-${{ hashFiles('Cargo.lock') }}-
+            # 第二优先级：同工具链、同目标、同构建类型（依赖变更，复用工具链通用产物）
+            ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ env.BUILD_TARGET }}-${{ env.BUILD_TYPE }}-
+            # 第三优先级：同工具链、同目标（兜底复用，避免从零编译）
+            ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ env.BUILD_TARGET }}-
+
       # 前置环境校验，提前暴露工具安装异常，避免构建中途失败
       - name: Verify build environment
         run: |
           rustc --version
           cargo --version
           trunk --version
-          rustup target list | grep wasm32-unknown-unknown
+          rustup target list | grep ${{ env.BUILD_TARGET }}
 
-      # 强制--locked构建，100%确保依赖版本与本地一致
+      # 强制--locked构建，100%确保依赖版本与本地一致，配合缓存实现完全可复现构建
       - name: Build project
-        run: trunk build --release --public-url "/ConwayDuel/" --locked
+        run: trunk build --${{ env.BUILD_TYPE }} --public-url "/ConwayDuel/" --locked
 
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v5

@@ -3,74 +3,103 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [master]
+    # 过滤不影响构建的文件，避免无效CI运行
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
+      - 'docs/**'
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+# 全局最小权限，按需下放至对应Job
+permissions: {}
 
+# 按ref隔离并发组，避免不同分支/事件的Workflow互相干扰，保留顺序部署原则
 concurrency:
-  group: "pages"
+  group: "github-pages-${{ github.ref }}"
   cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
+  RUST_BACKTRACE: full
+  # 全局统一版本号，一处修改全局生效，避免版本不一致
+  RUST_STABLE_VERSION: 1.80.0
+  TRUNK_VERSION: 0.21.0
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # 官方最新LTS，长期支持至2029年
+    timeout-minutes: 15 # 超时限制，避免CI无限挂起占用配额
+    permissions:
+      contents: read # 仅给checkout代码必须的最小权限
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      # 固定Rust工具链版本，完全符合dtolnay官方推荐用法
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_STABLE_VERSION }}
           targets: wasm32-unknown-unknown
 
-      - name: Cache Cargo Registry
+      # 缓存Cargo注册源与git依赖，绑定Rust版本避免缓存污染
+      - name: Cache Cargo registry
         uses: actions/cache@v4
         id: cache-cargo-registry
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-registry-${{ env.RUST_STABLE_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-registry-
+            ${{ runner.os }}-cargo-registry-${{ env.RUST_STABLE_VERSION }}-
 
-      - name: Cache Target Directory
+      # 缓存构建产物，按依赖、代码变更分级，最大化缓存复用
+      - name: Cache build target
         uses: actions/cache@v4
         id: cache-target
         with:
           path: target
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}-${{ hashFiles('src/**/*.rs') }}
+          key: ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('src/**/*.rs', 'Cargo.toml') }}
           restore-keys: |
-            ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}-
-            ${{ runner.os }}-target-
+            ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-
 
-      - name: Cache Trunk
+      # 缓存trunk二进制，绑定版本与Rust版本，避免重复编译
+      - name: Cache Trunk binary
         uses: actions/cache@v4
         id: cache-trunk
         with:
           path: ~/.cargo/bin/trunk
-          key: ${{ runner.os }}-trunk-0.21.0
-          restore-keys: |
-            ${{ runner.os }}-trunk-
+          key: ${{ runner.os }}-trunk-${{ env.TRUNK_VERSION }}-${{ env.RUST_STABLE_VERSION }}
 
+      # 3次重试应对网络波动，强制--locked确保版本一致
       - name: Install Trunk
         if: steps.cache-trunk.outputs.cache-hit != 'true'
-        run: cargo install trunk --version 0.21.0 --locked
+        run: |
+          for i in 1 2 3; do
+            cargo install trunk --version ${{ env.TRUNK_VERSION }} --locked && break
+            echo "Trunk install attempt $i failed, retrying in 5s..."
+            sleep 5
+          done
 
-      - name: Build
-        run: trunk build --release --public-url "/ConwayDuel/"
+      # 前置环境校验，提前暴露工具安装异常，避免构建中途失败
+      - name: Verify build environment
+        run: |
+          rustc --version
+          cargo --version
+          trunk --version
+          rustup target list | grep wasm32-unknown-unknown
 
-      - name: Setup Pages
+      # 强制--locked构建，100%确保依赖版本与本地一致
+      - name: Build project
+        run: trunk build --release --public-url "/ConwayDuel/" --locked
+
+      - name: Setup GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload artifact
+      - name: Upload build artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist
@@ -79,8 +108,12 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     needs: build
+    permissions:
+      pages: write
+      id-token: write
     steps:
       - name: Deploy to GitHub Pages
         id: deployment

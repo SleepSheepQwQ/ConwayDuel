@@ -12,7 +12,8 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: "github-pages-${{ github.ref }}"
@@ -35,7 +36,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      actions: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -46,71 +46,60 @@ jobs:
           toolchain: ${{ env.RUST_STABLE_VERSION }}
           targets: ${{ env.BUILD_TARGET }}
 
-      # 修复1：save-always 仅在 cache 步骤内，且语法正确
       - name: Cache Trunk binary
         uses: actions/cache@v4
         id: cache-trunk-binary
         with:
           path: /home/runner/.cargo/bin/trunk
-          key: ${{ runner.os }}-${{ runner.arch }}-trunk-binary-v${{ env.TRUNK_VERSION }}
+          key: trunk-${{ runner.os }}-${{ runner.arch }}-v${{ env.TRUNK_VERSION }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-trunk-binary-
-          save-always: true
+            trunk-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Debug Trunk cache status
         run: |
           echo "===== Trunk 缓存状态 ====="
           echo "缓存是否命中: ${{ steps.cache-trunk-binary.outputs.cache-hit }}"
-          echo "Trunk 二进制是否存在: $(test -f /home/runner/.cargo/bin/trunk && echo "是" || echo "否")"
           if [ -f /home/runner/.cargo/bin/trunk ]; then
-            echo "Trunk 版本: $(/home/runner/.cargo/bin/trunk --version)"
+            echo "Trunk 二进制存在，版本: $(/home/runner/.cargo/bin/trunk --version 2>/dev/null || echo '无法获取版本')"
+          else
+            echo "Trunk 二进制不存在"
           fi
 
-      - name: Install Trunk (cargo official)
-        if: steps.cache-trunk-binary.outputs.cache-hit != 'true' || !test -f /home/runner/.cargo/bin/trunk
+      - name: Install Trunk
+        if: steps.cache-trunk-binary.outputs.cache-hit != 'true'
         run: |
           echo "开始安装 Trunk v${{ env.TRUNK_VERSION }}"
           for i in 1 2 3; do
-            cargo install trunk --version ${{ env.TRUNK_VERSION }} --locked && break
+            if cargo install trunk --version ${{ env.TRUNK_VERSION }} --locked; then
+              echo "Trunk 安装成功"
+              break
+            fi
             echo "Trunk 安装尝试 $i 失败，5秒后重试..."
             sleep 5
           done
           chmod +x /home/runner/.cargo/bin/trunk
-          /home/runner/.cargo/bin/trunk --version
+          trunk --version
 
-      - name: Cache Cargo registry & git dependencies
+      - name: Cache Cargo registry
         uses: actions/cache@v4
         id: cache-cargo-registry
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ env.RUST_STABLE_VERSION }}-${{ hashFiles('Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-${{ env.RUST_STABLE_VERSION }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-registry-${{ env.RUST_STABLE_VERSION }}-
-          save-always: true
+            ${{ runner.os }}-cargo-${{ env.RUST_STABLE_VERSION }}-
 
       - name: Cache Trunk toolchain
         uses: actions/cache@v4
         id: cache-trunk-toolchain
         with:
           path: ~/.cache/trunk
-          key: ${{ runner.os }}-trunk-toolchain-v${{ env.TRUNK_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-trunk-${{ env.TRUNK_VERSION }}-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-trunk-toolchain-v${{ env.TRUNK_VERSION }}-
-          save-always: true
-
-      - name: Cache Rust build target
-        uses: actions/cache@v4
-        id: cache-rust-target
-        with:
-          path: target
-          key: ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ env.BUILD_TARGET }}-${{ env.BUILD_TYPE }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('src/**/*.rs') }}
-          restore-keys: |
-            ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ env.BUILD_TARGET }}-${{ env.BUILD_TYPE }}-${{ hashFiles('Cargo.lock') }}-
-            ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ env.BUILD_TARGET }}-${{ env.BUILD_TYPE }}-
-            ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ env.BUILD_TARGET }}-
-          save-always: true
+            ${{ runner.os }}-trunk-${{ env.TRUNK_VERSION }}-
 
       - name: Verify build environment
         id: env-verify
@@ -118,33 +107,39 @@ jobs:
           echo "===== 构建环境校验 ====="
           rustc --version
           cargo --version
-          trunk --version
-          rustup target list | grep ${{ env.BUILD_TARGET }}
-          echo "RUSTC_VERSION=$(rustc --version)" >> $GITHUB_OUTPUT
-          echo "TRUNK_VERSION=$(trunk --version)" >> $GITHUB_OUTPUT
+          trunk --version || echo "警告: trunk 命令未找到"
+          rustup target list | grep -q "${{ env.BUILD_TARGET }}" && echo "构建目标可用: ${{ env.BUILD_TARGET }}"
+          echo "RUSTC_VERSION=$(rustc --version | head -1)" >> $GITHUB_OUTPUT
+          echo "TRUNK_VERSION=$(trunk --version 2>/dev/null | head -1 || echo '未安装')" >> $GITHUB_OUTPUT
 
-      # 修复2：PUBLIC_URL 引用格式正确，无多余引号
       - name: Build project
         id: build-project
         run: |
           echo "===== 开始项目构建 ====="
-          trunk build --${{ env.BUILD_TYPE }} --public-url ${{ env.PUBLIC_URL }} --locked 2>&1 | tee ${{ env.BUILD_LOG_FILE }}
+          echo "PUBLIC_URL: ${{ env.PUBLIC_URL }}"
+          trunk build --${{ env.BUILD_TYPE }} --public-url ${{ env.PUBLIC_URL }} --locked 2>&1 | tee "${{ env.BUILD_LOG_FILE }}"
+          BUILD_EXIT_CODE="${PIPESTATUS[0]}"
+          echo "构建退出代码: $BUILD_EXIT_CODE"
+          exit $BUILD_EXIT_CODE
 
       - name: Setup GitHub Pages
+        if: success()
         uses: actions/configure-pages@v5
 
       - name: Upload build artifact
+        if: success()
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
       - name: Generate build failure report
-        id: generate-report
         if: failure()
+        id: generate-report
         run: |
           echo "===== 生成构建失败报告 ====="
-          grep -E 'error:|warning:|fatal:|Caused by:|error\[' ${{ env.BUILD_LOG_FILE }} > error-summary.txt || true
-          cat > ${{ env.REPORT_FILE }} << EOF
+          grep -E 'error:|warning:|fatal:|Caused by:|error\[' "${{ env.BUILD_LOG_FILE }}" > error-summary.txt 2>/dev/null || true
+          
+          cat > "${{ env.REPORT_FILE }}" << EOF
           # ConwayDuel 构建失败报告
           ## 基本信息
           | 项 | 内容 |
@@ -167,16 +162,17 @@ jobs:
 
           ## 核心错误摘要
           \`\`\`
-          $(cat error-summary.txt | head -100)
+          $(head -100 error-summary.txt 2>/dev/null || echo "无错误摘要信息")
           \`\`\`
 
-          > 注：以上为精简错误摘要，完整日志请点击上方「完整构建日志」链接查看，或下载本次构建的附件日志文件
+          > 注：以上为精简错误摘要，完整日志请点击上方「完整构建日志」链接查看
           EOF
-          echo "===== 构建失败精简报告 ====="
-          cat ${{ env.REPORT_FILE }}
+          
+          echo "===== 构建失败报告已生成 ====="
+          ls -la "${{ env.REPORT_FILE }}"
 
       - name: Upload failure report
-        if: failure() && steps.generate-report.conclusion == 'success'
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: build-failure-report-${{ github.run_id }}

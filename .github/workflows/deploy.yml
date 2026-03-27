@@ -1,6 +1,5 @@
 name: Deploy to GitHub Pages
 
-# 触发规则：仅master分支代码/配置变更时触发，过滤不影响构建的文档类文件，避免无效CI运行
 on:
   push:
     branches: [master]
@@ -9,71 +8,55 @@ on:
       - '.gitignore'
       - 'LICENSE'
       - 'docs/**'
-  workflow_dispatch: # 支持手动触发构建
+  workflow_dispatch:
 
-# 全局最小权限，按需下放至对应Job，遵循最小权限安全最佳实践
 permissions:
   contents: read
-  actions: read # 用于获取构建日志链接，生成错误报告
+  actions: read
 
-# 并发控制：按分支隔离，避免不同分支/事件的Workflow互相干扰，保留顺序部署原则
 concurrency:
   group: "github-pages-${{ github.ref }}"
   cancel-in-progress: false
 
-# 全局统一配置，一处修改全局生效，避免版本不一致
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: full # 构建失败时输出完整错误回溯
-  # 工具链版本锁定，彻底杜绝滚动更新带来的兼容性问题
+  RUST_BACKTRACE: full
   RUST_STABLE_VERSION: 1.80.0
   TRUNK_VERSION: 0.21.0
-  # 构建配置
   BUILD_TARGET: wasm32-unknown-unknown
   BUILD_TYPE: release
   PUBLIC_URL: "/ConwayDuel/"
-  # 错误报告配置
   REPORT_FILE: build-failure-report.md
   BUILD_LOG_FILE: build.log
 
 jobs:
-  # 构建Job：核心编译、缓存、制品生成
   build:
-    runs-on: ubuntu-24.04 # 官方最新LTS版本，长期支持至2029年，稳定无兼容风险
-    timeout-minutes: 15 # 超时限制，避免CI无限挂起占用配额
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
-      contents: read # 仅给checkout代码必须的最小权限
-      actions: read # 用于获取构建日志链接
+      contents: read
+      actions: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 固定Rust工具链版本，完全符合dtolnay官方推荐用法，确保构建可复现
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_STABLE_VERSION }}
           targets: ${{ env.BUILD_TARGET }}
 
-      # ==============================================
-      # 缓存分层1：Trunk 二进制（核心修复：彻底解决重复安装问题）
-      # 优化点：
-      # 1. save-always: true → 哪怕后续构建失败，只要安装成功就会保存缓存
-      # 2. 绝对路径 → 彻底解决~符号解析偏差问题
-      # 3. 精准key → 仅绑定系统/架构/Trunk版本，不会因Rust版本/代码变更失效
-      # 4. 兜底restore-keys → 同系统同架构优先复用，避免重新安装
-      # ==============================================
+      # 修复1：save-always 仅在 cache 步骤内，且语法正确
       - name: Cache Trunk binary
         uses: actions/cache@v4
         id: cache-trunk-binary
         with:
-          path: /home/runner/.cargo/bin/trunk # Ubuntu Runner固定绝对路径
+          path: /home/runner/.cargo/bin/trunk
           key: ${{ runner.os }}-${{ runner.arch }}-trunk-binary-v${{ env.TRUNK_VERSION }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-trunk-binary-
-          save-always: true # 核心修复：无论Job成功/失败，都强制保存缓存
+          save-always: true
 
-      # 调试步骤：日志中直观展示缓存状态，方便排查问题
       - name: Debug Trunk cache status
         run: |
           echo "===== Trunk 缓存状态 ====="
@@ -83,10 +66,6 @@ jobs:
             echo "Trunk 版本: $(/home/runner/.cargo/bin/trunk --version)"
           fi
 
-      # ==============================================
-      # Trunk 安装（二选一，默认使用稳定的cargo安装，可切换为秒级预编译安装）
-      # ==============================================
-      # 默认方案：cargo官方安装，锁定版本，3次重试应对网络波动
       - name: Install Trunk (cargo official)
         if: steps.cache-trunk-binary.outputs.cache-hit != 'true' || !test -f /home/runner/.cargo/bin/trunk
         run: |
@@ -96,24 +75,9 @@ jobs:
             echo "Trunk 安装尝试 $i 失败，5秒后重试..."
             sleep 5
           done
-          # 安装后强制验证，确保二进制有效
           chmod +x /home/runner/.cargo/bin/trunk
           /home/runner/.cargo/bin/trunk --version
 
-      # 【可选极速方案】注释上面的安装步骤，启用这个：预编译二进制秒级安装，零编译等待
-      # - name: Install Trunk (prebuilt binary)
-      #   if: steps.cache-trunk-binary.outputs.cache-hit != 'true' || !test -f /home/runner/.cargo/bin/trunk
-      #   run: |
-      #     echo "下载 Trunk v${{ env.TRUNK_VERSION }} 预编译二进制"
-      #     curl -fL "https://github.com/thedodd/trunk/releases/download/v${{ env.TRUNK_VERSION }}/trunk-x86_64-unknown-linux-gnu.tar.gz" | tar -xz
-      #     mv trunk /home/runner/.cargo/bin/
-      #     chmod +x /home/runner/.cargo/bin/trunk
-      #     trunk --version
-
-      # ==============================================
-      # 缓存分层2：Cargo 依赖源缓存（仅Cargo.lock变化时失效）
-      # 作用：避免每次CI重新下载所有crates.io/git依赖，节省30秒-2分钟
-      # ==============================================
       - name: Cache Cargo registry & git dependencies
         uses: actions/cache@v4
         id: cache-cargo-registry
@@ -126,10 +90,6 @@ jobs:
             ${{ runner.os }}-cargo-registry-${{ env.RUST_STABLE_VERSION }}-
           save-always: true
 
-      # ==============================================
-      # 缓存分层3：Trunk 工具链缓存
-      # 作用：避免Trunk每次构建重新下载wasm-bindgen-cli、wasm-opt等配套工具
-      # ==============================================
       - name: Cache Trunk toolchain
         uses: actions/cache@v4
         id: cache-trunk-toolchain
@@ -140,10 +100,6 @@ jobs:
             ${{ runner.os }}-trunk-toolchain-v${{ env.TRUNK_VERSION }}-
           save-always: true
 
-      # ==============================================
-      # 缓存分层4：Rust 构建产物缓存（核心增量编译优化）
-      # 作用：实现增量编译，仅重新编译修改的代码，节省80%+构建时间
-      # ==============================================
       - name: Cache Rust build target
         uses: actions/cache@v4
         id: cache-rust-target
@@ -151,13 +107,11 @@ jobs:
           path: target
           key: ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ env.BUILD_TARGET }}-${{ env.BUILD_TYPE }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('src/**/*.rs') }}
           restore-keys: |
-            # 多阶兜底：优先复用同依赖版本的缓存，其次同工具链同构建类型，最后兜底同工具链
             ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ env.BUILD_TARGET }}-${{ env.BUILD_TYPE }}-${{ hashFiles('Cargo.lock') }}-
             ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ env.BUILD_TARGET }}-${{ env.BUILD_TYPE }}-
             ${{ runner.os }}-target-${{ env.RUST_STABLE_VERSION }}-${{ env.BUILD_TARGET }}-
           save-always: true
 
-      # 前置环境校验：提前暴露工具安装异常，避免构建中途失败
       - name: Verify build environment
         id: env-verify
         run: |
@@ -166,40 +120,30 @@ jobs:
           cargo --version
           trunk --version
           rustup target list | grep ${{ env.BUILD_TARGET }}
-          # 保存版本信息到输出，用于错误报告
           echo "RUSTC_VERSION=$(rustc --version)" >> $GITHUB_OUTPUT
           echo "TRUNK_VERSION=$(trunk --version)" >> $GITHUB_OUTPUT
 
-      # 核心构建步骤：同步捕获完整日志，同时保留控制台输出，用于错误报告
+      # 修复2：PUBLIC_URL 引用格式正确，无多余引号
       - name: Build project
         id: build-project
         run: |
           echo "===== 开始项目构建 ====="
-          trunk build --${{ env.BUILD_TYPE }} --public-url "${{ env.PUBLIC_URL }}" --locked 2>&1 | tee ${{ env.BUILD_LOG_FILE }}
+          trunk build --${{ env.BUILD_TYPE }} --public-url ${{ env.PUBLIC_URL }} --locked 2>&1 | tee ${{ env.BUILD_LOG_FILE }}
 
-      # GitHub Pages 配置
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v5
 
-      # 上传构建成功的制品，用于后续部署
       - name: Upload build artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
-      # ==============================================
-      # 构建失败自动处理模块（仅构建失败时执行）
-      # 功能：自动生成精简错误报告，同时归档完整日志
-      # ==============================================
       - name: Generate build failure report
         id: generate-report
-        if: failure() # 仅当前面步骤失败时执行
+        if: failure()
         run: |
           echo "===== 生成构建失败报告 ====="
-          # 提取核心错误信息：过滤冗余进度日志，只保留错误/警告/根因
           grep -E 'error:|warning:|fatal:|Caused by:|error\[' ${{ env.BUILD_LOG_FILE }} > error-summary.txt || true
-
-          # 生成Markdown格式的精简报告
           cat > ${{ env.REPORT_FILE }} << EOF
           # ConwayDuel 构建失败报告
           ## 基本信息
@@ -228,12 +172,9 @@ jobs:
 
           > 注：以上为精简错误摘要，完整日志请点击上方「完整构建日志」链接查看，或下载本次构建的附件日志文件
           EOF
-
-          # 控制台输出报告，方便直接查看
           echo "===== 构建失败精简报告 ====="
           cat ${{ env.REPORT_FILE }}
 
-      # 上传错误报告+完整日志到Actions制品，保留30天
       - name: Upload failure report
         if: failure() && steps.generate-report.conclusion == 'success'
         uses: actions/upload-artifact@v4
@@ -244,14 +185,13 @@ jobs:
             ${{ env.BUILD_LOG_FILE }}
           retention-days: 30
 
-  # 部署Job：仅构建成功后执行，部署到GitHub Pages
   deploy:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    needs: build # 依赖构建Job，构建成功才会执行
+    needs: build
     permissions:
       pages: write
       id-token: write
@@ -259,37 +199,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
-  # ==============================================
-  # 【可选功能】构建失败报告提交到专用分支（长期归档）
-  # 功能：把所有历史构建失败报告永久保存在仓库专用分支，不污染master主分支
-  # 启用方式：取消下面的注释，同时给build job的permissions添加 contents: write
-  # ==============================================
-  # commit-failure-report:
-  #   runs-on: ubuntu-24.04
-  #   needs: build
-  #   if: failure()
-  #   permissions:
-  #     contents: write
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ci-build-failure-reports # 专用报告分支，自动创建
-  #         fetch-depth: 0
-  #         create-branch: true
-  #
-  #     - name: Download failure report
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: build-failure-report-${{ github.run_id }}
-  #
-  #     - name: Commit report to dedicated branch
-  #       run: |
-  #         mkdir -p reports
-  #         mv ${{ env.REPORT_FILE }} reports/failure-report-${{ github.run_id }}.md
-  #         git config --local user.name "github-actions[bot]"
-  #         git config --local user.email "github-actions[bot]@users.noreply.github.com"
-  #         git add reports/
-  #         git commit -m "ci: add build failure report for run ${{ github.run_id }}"
-  #         git push origin ci-build-failure-reports

@@ -1,24 +1,20 @@
-use glam::Vec2;
+use glam::{Vec2, FloatExt};
 use hecs::World;
 use std::time::Duration;
-
 use crate::config::GameConfig;
 use crate::ecs::components::*;
 
 pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
     let dt_secs = dt.as_secs_f32();
-
-    // 收集所有 ship 信息，避免借用冲突
+    // 预收集所有飞船信息，避免借用冲突
     let mut ship_infos: Vec<(hecs::Entity, Transform, Ship, AiState)> = Vec::new();
     for (entity, (transform, ship, ai)) in world.query::<(&Transform, &Ship, &AiState)>().iter() {
         ship_infos.push((entity, *transform, *ship, *ai));
     }
 
     let mut updates: Vec<(hecs::Entity, Vec2, f32, AiState)> = Vec::new();
-
     for (entity, transform, ship, ai_state) in &ship_infos {
         let mut nearest_enemy: Option<(hecs::Entity, f32, Vec2)> = None;
-
         for (other_entity, other_transform, other_ship, _) in &ship_infos {
             if *other_entity == *entity {
                 continue;
@@ -26,7 +22,6 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
             if !ship.faction.is_enemy(&other_ship.faction) {
                 continue;
             }
-
             let dist = transform.position.distance(other_transform.position);
             if dist < config.ai_detection_range {
                 if nearest_enemy.is_none() || dist < nearest_enemy.as_ref().unwrap().1 {
@@ -38,11 +33,9 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
         let mut target_velocity = Vec2::ZERO;
         let mut target_angular = 0.0;
         let mut new_state = *ai_state;
-
         match nearest_enemy {
             Some((enemy_entity, dist, enemy_pos)) => {
                 let direction = (enemy_pos - transform.position).normalize_or_zero();
-
                 if ship.health / ship.max_health < config.ai_flee_threshold {
                     new_state.current_state = AiBehaviorState::Retreating;
                     target_velocity = -direction * config.ship_max_speed * 0.8;
@@ -52,11 +45,9 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
                 } else if dist < config.ai_engagement_range {
                     new_state.current_state = AiBehaviorState::Attacking;
                     new_state.target = Some(enemy_entity);
-
                     let target_angle = direction.y.atan2(direction.x);
                     let angle_diff = target_angle - transform.rotation;
                     target_angular = angle_diff * config.ship_turn_speed;
-
                     if dist < 5.0 {
                         target_velocity = -direction * config.ship_max_speed * 0.5;
                     } else {
@@ -66,7 +57,6 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
                     new_state.current_state = AiBehaviorState::Chasing;
                     new_state.target = Some(enemy_entity);
                     target_velocity = direction * config.ship_max_speed * 0.8;
-
                     let target_angle = direction.y.atan2(direction.x);
                     let angle_diff = target_angle - transform.rotation;
                     target_angular = angle_diff * config.ship_turn_speed;
@@ -79,21 +69,16 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
                 target_angular = 0.0;
             }
         }
-
         updates.push((*entity, target_velocity, target_angular, new_state));
     }
 
+    // 统一更新组件，避免借用冲突
+    let lerp_factor = 1.0 - (-config.ai_aggressiveness * dt_secs * 5.0).exp();
     for (entity, target_velocity, target_angular, new_state) in updates {
-        if let Ok(velocity) = world.get::<&Velocity>(entity) {
-            let lerp_factor = 1.0 - (-config.ai_aggressiveness * dt_secs * 5.0).exp();
-            let new_linear = velocity.linear + (target_velocity - velocity.linear) * lerp_factor;
-            let new_angular = velocity.angular + (target_angular - velocity.angular) * lerp_factor;
-            if let Ok(mut v) = world.get::<&mut Velocity>(entity) {
-                v.linear = new_linear;
-                v.angular = new_angular;
-            }
-        }
-        if let Ok(mut ai) = world.get::<&mut AiState>(entity) {
+        if let Ok(mut query) = world.query_one_mut::<(&mut Velocity, &mut AiState)>(entity) {
+            let (velocity, ai) = query.split();
+            velocity.linear = velocity.linear.lerp(target_velocity, lerp_factor);
+            velocity.angular = velocity.angular.lerp(target_angular, lerp_factor);
             *ai = new_state;
         }
     }

@@ -8,38 +8,34 @@ use crate::ecs::events::{EventBus, GameEvent};
 pub fn weapon_system(
     world: &mut World,
     dt: Duration,
-    events: &mut EventBus,
+    _events: &mut EventBus,
     config: &GameConfig,
 ) {
-    let dt_secs = dt.as_secs_f32();
-
-    // 收集需要发射的子弹信息
+    // 预收集发射动作，避免query_mut时同时spawn的借用冲突
     let mut fire_actions: Vec<(hecs::Entity, Transform, Ship)> = Vec::new();
-    for (entity, (transform, ship, weapon, ai)) in world.query::<(&Transform, &Ship, &mut Weapon, &AiState)>().iter() {
-        let should_fire = ai.current_state == AiBehaviorState::Attacking &&
-            weapon.remaining_cooldown.is_zero() &&
-            ai.target.is_some();
+    
+    // 先更新冷却，收集发射指令
+    for (entity, (transform, ship, mut weapon, ai)) in
+        world.query_mut::<(&Transform, &Ship, &mut Weapon, &AiState)>()
+    {
+        weapon.remaining_cooldown = weapon.remaining_cooldown.saturating_sub(dt);
+        
+        let should_fire = ai.current_state == AiBehaviorState::Attacking
+            && weapon.remaining_cooldown.is_zero()
+            && ai.target.is_some();
+        
         if should_fire {
             fire_actions.push((entity, *transform, *ship));
-        }
-    }
-
-    // 更新冷却时间
-    for (_entity, (_transform, _ship, mut weapon, _ai)) in world.query_mut::<(&Transform, &Ship, &mut Weapon, &AiState)>() {
-        weapon.remaining_cooldown = weapon.remaining_cooldown.saturating_sub(dt);
-    }
-
-    // 发射子弹
-    for (_entity, transform, ship) in fire_actions {
-        // 重置冷却
-        if let Ok(mut weapon) = world.get::<&mut Weapon>(_entity) {
             weapon.remaining_cooldown = weapon.cooldown;
         }
+    }
 
+    // 统一生成子弹
+    for (shooter_entity, transform, ship) in fire_actions {
         let direction = Vec2::new(transform.rotation.cos(), transform.rotation.sin());
         let bullet_speed = config.ship_max_speed * config.bullet_speed_multiplier;
         let bullet_pos = transform.position + direction * config.ship_size;
-
+        
         world.spawn((
             Transform {
                 position: bullet_pos,
@@ -51,7 +47,7 @@ pub fn weapon_system(
                 angular: 0.0,
             },
             Bullet {
-                shooter: _entity,
+                shooter: shooter_entity,
                 lifetime: Duration::from_secs_f32(config.bullet_lifetime),
                 damage: config.bullet_damage,
             },
@@ -71,9 +67,12 @@ pub fn weapon_system(
 pub fn damage_system(world: &mut World, events: &mut EventBus) {
     let mut to_remove: Vec<hecs::Entity> = Vec::new();
     let mut deaths: Vec<(Vec2, Faction)> = Vec::new();
+    // 预收集所有命中事件，避免借用冲突
+    let mut hit_events: Vec<(hecs::Entity, hecs::Entity, f32)> = Vec::new();
 
     for event in events.events() {
         if let GameEvent::Collision { entity_a, entity_b } = event {
+            // 区分子弹和飞船
             let (bullet_entity, ship_entity) = if world.get::<&Bullet>(*entity_a).is_ok() {
                 (*entity_a, *entity_b)
             } else if world.get::<&Bullet>(*entity_b).is_ok() {
@@ -82,99 +81,113 @@ pub fn damage_system(world: &mut World, events: &mut EventBus) {
                 continue;
             };
 
-            let bullet_damage = if let Ok(bullet) = world.get::<&Bullet>(bullet_entity) {
-                bullet.damage
-            } else {
+            // 校验子弹有效性
+            let Ok(bullet) = world.get::<&Bullet>(bullet_entity) else {
                 continue;
             };
-
-            let shooter = if let Ok(bullet) = world.get::<&Bullet>(bullet_entity) {
-                bullet.shooter
-            } else {
+            if ship_entity == bullet.shooter {
                 continue;
-            };
-
-            if ship_entity == shooter {
+            }
+            if world.get::<&Ship>(ship_entity).is_err() {
                 continue;
             }
 
-            let should_die = if let Ok(mut ship) = world.get::<&mut Ship>(ship_entity) {
-                ship.health -= bullet_damage;
-                ship.health <= 0.0
-            } else {
-                continue;
-            };
-
-            to_remove.push(bullet_entity);
-
-            if should_die {
-                let faction = if let Ok(ship) = world.get::<&Ship>(ship_entity) {
-                    ship.faction
-                } else {
-                    continue;
-                };
-                let position = if let Ok(t) = world.get::<&Transform>(ship_entity) {
-                    t.position
-                } else {
-                    continue;
-                };
-
-                world.despawn(ship_entity).ok();
-                // 修复：生成 RespawnTimer 时保存 faction
-                world.spawn((RespawnTimer::new(Duration::from_secs_f32(3.0), faction),));
-                
-                deaths.push((position, faction));
-                let color = faction.to_color();
-                world.spawn((
-                    Transform {
-                        position,
-                        rotation: 0.0,
-                        scale: Vec2::ONE,
-                    },
-                    Effect {
-                        lifetime: Duration::from_secs_f32(0.5),
-                        max_lifetime: Duration::from_secs_f32(0.5),
-                        start_scale: 1.0,
-                        end_scale: 3.0,
-                    },
-                    Renderable {
-                        color: [color[0], color[1], color[2], 0.8],
-                        layer: RenderLayer::Effect,
-                        visible: true,
-                    },
-                ));
-            }
+            hit_events.push((bullet_entity, ship_entity, bullet.damage));
         }
     }
 
+    // 统一处理伤害
+    for (bullet_entity, ship_entity, damage) in hit_events {
+        to_remove.push(bullet_entity);
+
+        let Ok(mut ship) = world.get::<&mut Ship>(ship_entity) else {
+            continue;
+        };
+        ship.health -= damage;
+
+        if ship.health <= 0.0 {
+            // 获取飞船信息
+            let Ok(ship_ref) = world.get::<&Ship>(ship_entity) else {
+                continue;
+            };
+            let faction = ship_ref.faction;
+            let Ok(transform) = world.get::<&Transform>(ship_entity) else {
+                continue;
+            };
+            let position = transform.position;
+
+            // 销毁飞船，生成带阵营的重生计时器
+            world.despawn(ship_entity).ok();
+            world.spawn((RespawnTimer::new(Duration::from_secs_f32(3.0), faction),));
+            deaths.push((position, faction));
+
+            // 生成死亡特效
+            let color = faction.to_color();
+            world.spawn((
+                Transform {
+                    position,
+                    rotation: 0.0,
+                    scale: Vec2::ONE,
+                },
+                Effect {
+                    lifetime: Duration::from_secs_f32(0.5),
+                    max_lifetime: Duration::from_secs_f32(0.5),
+                    start_scale: 1.0,
+                    end_scale: 3.0,
+                },
+                Renderable {
+                    color: [color[0], color[1], color[2], 0.8],
+                    layer: RenderLayer::Effect,
+                    visible: true,
+                },
+            ));
+        }
+    }
+
+    // 统一销毁子弹
     for entity in to_remove {
         world.despawn(entity).ok();
     }
 
+    // 推送死亡事件
     for (position, faction) in deaths {
         events.push(GameEvent::Death { position, faction });
     }
 }
 
 pub fn cleanup_system(world: &mut World, dt: Duration) {
+    // 预收集子弹更新/销毁信息
+    let mut bullet_updates: Vec<(hecs::Entity, Duration)> = Vec::new();
+    for (entity, bullet) in world.query::<&Bullet>().iter() {
+        let remaining = bullet.lifetime.saturating_sub(dt);
+        bullet_updates.push((entity, remaining));
+    }
+
     let mut to_remove: Vec<hecs::Entity> = Vec::new();
-
-    // 修复：使用可变引用 (&mut Bullet) 来更新组件数据
-    for (entity, mut bullet) in world.query::<&mut Bullet>().iter() {
-        bullet.lifetime = bullet.lifetime.saturating_sub(dt);
-        if bullet.lifetime.is_zero() {
+    for (entity, remaining) in bullet_updates {
+        if remaining.is_zero() {
             to_remove.push(entity);
+        } else if let Ok(mut bullet) = world.get::<&mut Bullet>(entity) {
+            bullet.lifetime = remaining;
         }
     }
 
-    // 修复：使用可变引用 (&mut Effect) 来更新组件数据
-    for (entity, mut effect) in world.query::<&mut Effect>().iter() {
-        effect.lifetime = effect.lifetime.saturating_sub(dt);
-        if effect.lifetime.is_zero() {
+    // 预收集特效更新/销毁信息
+    let mut effect_updates: Vec<(hecs::Entity, Duration)> = Vec::new();
+    for (entity, effect) in world.query::<&Effect>().iter() {
+        let remaining = effect.lifetime.saturating_sub(dt);
+        effect_updates.push((entity, remaining));
+    }
+
+    for (entity, remaining) in effect_updates {
+        if remaining.is_zero() {
             to_remove.push(entity);
+        } else if let Ok(mut effect) = world.get::<&mut Effect>(entity) {
+            effect.lifetime = remaining;
         }
     }
 
+    // 统一销毁实体
     for entity in to_remove {
         world.despawn(entity).ok();
     }

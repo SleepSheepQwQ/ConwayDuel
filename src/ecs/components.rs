@@ -1,6 +1,6 @@
 use glam::Vec2;
 use std::time::Duration;
-use crate::config::{Faction, GameConfig};
+use crate::config::Faction;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Transform {
@@ -102,11 +102,10 @@ pub struct Effect {
 #[derive(Debug, Clone, Copy)]
 pub struct RespawnTimer {
     pub remaining: Duration,
-    pub faction: Faction, // 修复：添加 faction 字段
+    pub faction: Faction,
 }
 
 impl RespawnTimer {
-    // 修复：构造函数增加 faction 参数
     pub fn new(delay: Duration, faction: Faction) -> Self {
         Self { remaining: delay, faction }
     }

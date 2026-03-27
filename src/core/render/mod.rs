@@ -6,27 +6,24 @@ use std::mem;
 use wasm_bindgen::JsCast;
 use crate::config::GameConfig;
 use crate::ecs::components::*;
-
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct Vertex {
     position: [f32; 2],
     color: [f32; 4],
 }
-
 pub struct Renderer {
     gl: Context,
-    program: NativeProgram,
-    vao: NativeVertexArray,
-    vbo: NativeBuffer,
-    u_projection: NativeUniformLocation,
-    u_translation: NativeUniformLocation,
-    u_rotation: NativeUniformLocation,
-    u_scale: NativeUniformLocation,
+    program: Program,
+    vao: VertexArray,
+    vbo: Buffer,
+    u_projection: UniformLocation,
+    u_translation: UniformLocation,
+    u_rotation: UniformLocation,
+    u_scale: UniformLocation,
     canvas_width: f32,
     canvas_height: f32,
 }
-
 impl Renderer {
     pub fn new(canvas: &web_sys::HtmlCanvasElement, _config: &GameConfig) -> Result<Self, String> {
         // 正确处理canvas上下文获取
@@ -41,7 +38,6 @@ impl Renderer {
             .map_err(|_| "转换为 WebGl2RenderingContext 失败".to_string())?;
         
         let gl = unsafe { Context::from_webgl2_context(gl_context) };
-
         // 着色器源码
         let vertex_shader_source = r#"#version 300 es
             precision mediump float;
@@ -69,11 +65,9 @@ impl Renderer {
                 frag_color = v_color;
             }
         "#;
-
         // 编译着色器
         let vertex_shader = unsafe { Self::compile_shader(&gl, VERTEX_SHADER, vertex_shader_source)? };
         let fragment_shader = unsafe { Self::compile_shader(&gl, FRAGMENT_SHADER, fragment_shader_source)? };
-
         // 链接着色器程序
         let program = unsafe {
             let program = gl
@@ -91,11 +85,9 @@ impl Renderer {
             gl.delete_shader(fragment_shader);
             program
         };
-
         unsafe {
             gl.use_program(Some(program));
         }
-
         // 创建VAO/VBO
         let vao = unsafe {
             gl.create_vertex_array()
@@ -105,7 +97,6 @@ impl Renderer {
             gl.create_buffer()
                 .ok_or("创建 VBO 失败".to_string())?
         };
-
         // 配置VAO
         unsafe {
             gl.bind_vertex_array(Some(vao));
@@ -117,7 +108,6 @@ impl Renderer {
             gl.vertex_attrib_pointer_f32(1, 4, FLOAT, false, stride, 2 * 4);
             gl.bind_vertex_array(None);
         }
-
         // 获取Uniform位置
         let u_projection = unsafe {
             gl.get_uniform_location(program, "u_projection")
@@ -135,7 +125,6 @@ impl Renderer {
             gl.get_uniform_location(program, "u_scale")
                 .ok_or("无法获取 u_scale uniform 位置".to_string())?
         };
-
         Ok(Self {
             gl,
             program,
@@ -149,12 +138,11 @@ impl Renderer {
             canvas_height: 100.0,
         })
     }
-
     unsafe fn compile_shader(
         gl: &Context,
-        shader_type: NativeShaderType,
+        shader_type: ShaderType,
         source: &str,
-    ) -> Result<NativeShader, String> {
+    ) -> Result<Shader, String> {
         let shader = gl
             .create_shader(shader_type)
             .ok_or("创建着色器失败".to_string())?;
@@ -167,12 +155,10 @@ impl Renderer {
         }
         Ok(shader)
     }
-
     pub fn resize(&mut self, width: f32, height: f32, _dpr: f32) {
         self.canvas_width = width;
         self.canvas_height = height;
     }
-
     pub fn render(&self, world: &World, config: &GameConfig) {
         unsafe {
             let gl = &self.gl;
@@ -180,7 +166,6 @@ impl Renderer {
             gl.clear_color(0.02, 0.02, 0.05, 1.0);
             gl.clear(COLOR_BUFFER_BIT);
             gl.use_program(Some(self.program));
-
             // 设置投影矩阵
             let projection = Mat4::orthographic_rh(
                 0.0,
@@ -191,10 +176,8 @@ impl Renderer {
                 1.0,
             );
             gl.uniform_matrix_4_f32_slice(Some(&self.u_projection), false, &projection.to_cols_array());
-
             // 渲染边界
             self.render_boundary(config);
-
             // 渲染所有实体
             for (_entity, (transform, renderable)) in
                 world.query::<(&Transform, &Renderable)>().iter()
@@ -228,7 +211,6 @@ impl Renderer {
             }
         }
     }
-
     fn render_ship(&self, transform: &Transform, color: &[f32; 4]) {
         unsafe {
             let gl = &self.gl;
@@ -248,12 +230,11 @@ impl Renderer {
                     color: *color,
                 },
             ];
-
             gl.bind_vertex_array(Some(self.vao));
             gl.bind_buffer(ARRAY_BUFFER, Some(self.vbo));
             gl.buffer_data_size(
                 ARRAY_BUFFER,
-                (vertices.len() * mem::size_of::<Vertex>()) as isize,
+                (vertices.len() * mem::size_of::<Vertex>()) as i32,
                 STATIC_DRAW,
             );
             gl.buffer_sub_data_u8_slice(
@@ -261,14 +242,12 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&vertices),
             );
-
             gl.uniform_2_f32(Some(&self.u_translation), transform.position.x, transform.position.y);
             gl.uniform_1_f32(Some(&self.u_rotation), transform.rotation);
             gl.uniform_2_f32(Some(&self.u_scale), transform.scale.x, transform.scale.y);
             gl.draw_arrays(TRIANGLES, 0, 3);
         }
     }
-
     fn render_circle(&self, transform: &Transform, color: &[f32; 4], radius: f32) {
         unsafe {
             let gl = &self.gl;
@@ -279,7 +258,6 @@ impl Renderer {
                 position: [0.0, 0.0],
                 color: *color,
             });
-
             for i in 0..=SEGMENTS {
                 let angle = (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
                 vertices.push(Vertex {
@@ -287,12 +265,11 @@ impl Renderer {
                     color: *color,
                 });
             }
-
             gl.bind_vertex_array(Some(self.vao));
             gl.bind_buffer(ARRAY_BUFFER, Some(self.vbo));
             gl.buffer_data_size(
                 ARRAY_BUFFER,
-                (vertices.len() * mem::size_of::<Vertex>()) as isize,
+                (vertices.len() * mem::size_of::<Vertex>()) as i32,
                 STATIC_DRAW,
             );
             gl.buffer_sub_data_u8_slice(
@@ -300,15 +277,12 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&vertices),
             );
-
             gl.uniform_2_f32(Some(&self.u_translation), transform.position.x, transform.position.y);
             gl.uniform_1_f32(Some(&self.u_rotation), transform.rotation);
             gl.uniform_2_f32(Some(&self.u_scale), transform.scale.x, transform.scale.y);
-            // 修复类型错误：usize转i32
             gl.draw_arrays(TRIANGLE_FAN, 0, (SEGMENTS + 2) as i32);
         }
     }
-
     fn render_boundary(&self, config: &GameConfig) {
         unsafe {
             let gl = &self.gl;
@@ -321,12 +295,11 @@ impl Renderer {
                 Vertex { position: [w, h], color },
                 Vertex { position: [0.0, h], color },
             ];
-
             gl.bind_vertex_array(Some(self.vao));
             gl.bind_buffer(ARRAY_BUFFER, Some(self.vbo));
             gl.buffer_data_size(
                 ARRAY_BUFFER,
-                (vertices.len() * mem::size_of::<Vertex>()) as isize,
+                (vertices.len() * mem::size_of::<Vertex>()) as i32,
                 STATIC_DRAW,
             );
             gl.buffer_sub_data_u8_slice(
@@ -334,7 +307,6 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&vertices),
             );
-
             gl.uniform_2_f32(Some(&self.u_translation), 0.0, 0.0);
             gl.uniform_1_f32(Some(&self.u_rotation), 0.0);
             gl.uniform_2_f32(Some(&self.u_scale), 1.0, 1.0);

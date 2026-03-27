@@ -1,9 +1,8 @@
-use glam::{Vec2, FloatExt};
+use glam::Vec2;
 use hecs::World;
 use std::time::Duration;
 use crate::config::GameConfig;
 use crate::ecs::components::*;
-
 pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
     let dt_secs = dt.as_secs_f32();
     // 预收集所有飞船信息，避免借用冲突
@@ -11,7 +10,6 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
     for (entity, (transform, ship, ai)) in world.query::<(&Transform, &Ship, &AiState)>().iter() {
         ship_infos.push((entity, *transform, *ship, *ai));
     }
-
     let mut updates: Vec<(hecs::Entity, Vec2, f32, AiState)> = Vec::new();
     for (entity, transform, ship, ai_state) in &ship_infos {
         let mut nearest_enemy: Option<(hecs::Entity, f32, Vec2)> = None;
@@ -29,7 +27,6 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
                 }
             }
         }
-
         let mut target_velocity = Vec2::ZERO;
         let mut target_angular = 0.0;
         let mut new_state = *ai_state;
@@ -71,12 +68,10 @@ pub fn ai_system(world: &mut World, dt: Duration, config: &GameConfig) {
         }
         updates.push((*entity, target_velocity, target_angular, new_state));
     }
-
     // 统一更新组件，避免借用冲突
     let lerp_factor = 1.0 - (-config.ai_aggressiveness * dt_secs * 5.0).exp();
     for (entity, target_velocity, target_angular, new_state) in updates {
-        if let Ok(mut query) = world.query_one_mut::<(&mut Velocity, &mut AiState)>(entity) {
-            let (velocity, ai) = query.split();
+        if let Ok((mut velocity, mut ai)) = world.query_one_mut::<(&mut Velocity, &mut AiState)>(entity) {
             velocity.linear = velocity.linear.lerp(target_velocity, lerp_factor);
             velocity.angular = velocity.angular.lerp(target_angular, lerp_factor);
             *ai = new_state;

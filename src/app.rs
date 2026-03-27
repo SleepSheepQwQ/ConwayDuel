@@ -12,7 +12,6 @@ use crate::core::physics::{boundary_system, collision_system, movement_system};
 use crate::core::render::Renderer;
 use crate::ecs::components::*;
 use crate::ecs::events::EventBus;
-
 pub struct GameAppInner {
     config: GameConfig,
     world: World,
@@ -25,23 +24,20 @@ pub struct GameAppInner {
     canvas: web_sys::HtmlCanvasElement,
     dpr: f32,
 }
-
 impl GameAppInner {
     pub fn new(canvas: web_sys::HtmlCanvasElement, dpr: f32) -> Result<Self, String> {
         let config = GameConfig::default();
-        let mut renderer = Renderer::new(canvas.clone(), &config)
+        let mut renderer = Renderer::new(&canvas, &config)
             .map_err(|e| format!("渲染器初始化失败: {}", e))?;
         let mut world = World::new();
         let event_bus = EventBus::default();
         let client_width = canvas.client_width() as f32;
         let client_height = canvas.client_height() as f32;
         renderer.resize(client_width, client_height, dpr);
-
         // 初始化三阵营飞船
         spawn_ship(&mut world, &config, Vec2::new(20.0, 30.0), Faction::Red);
         spawn_ship(&mut world, &config, Vec2::new(50.0, 30.0), Faction::Green);
         spawn_ship(&mut world, &config, Vec2::new(80.0, 30.0), Faction::Blue);
-
         Ok(Self {
             config,
             world,
@@ -55,7 +51,6 @@ impl GameAppInner {
             dpr,
         })
     }
-
     pub fn start(&mut self) {
         if self.running {
             return;
@@ -66,16 +61,13 @@ impl GameAppInner {
             .map(|p| p.now() as f64)
             .unwrap_or(0.0);
         self.last_frame_time = Some(now_ms);
-
         let app = Rc::new(RefCell::new(self as *mut GameAppInner));
         let app_clone = app.clone();
         let f = Rc::new(RefCell::new(None::<Closure<dyn FnMut(f64)>>));
         let g = f.clone();
-
         *g.borrow_mut() = Some(Closure::wrap(Box::new(move |_time: f64| {
             let app_ptr = *app_clone.borrow();
             let app = unsafe { &mut *app_ptr };
-
             let now_ms = web_sys::window()
                 .and_then(|w| w.performance())
                 .map(|p| p.now() as f64)
@@ -88,32 +80,26 @@ impl GameAppInner {
             };
             app.last_frame_time = Some(now_ms);
             app.accumulated_time += frame_time;
-
             let fixed_dt = Duration::from_secs_f32(1.0 / app.config.fixed_update_rate);
             let max_accumulation = Duration::from_secs_f32(app.config.max_frame_accumulation);
             if app.accumulated_time > max_accumulation {
                 app.accumulated_time = max_accumulation;
             }
-
             while app.accumulated_time >= fixed_dt {
                 app.fixed_update(fixed_dt);
                 app.accumulated_time -= fixed_dt;
             }
-
             app.render();
-
             let window = web_sys::window().unwrap();
             app.animation_handle = Some(
                 window.request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref()).unwrap()
             );
         }) as Box<dyn FnMut(f64)>));
-
         let window = web_sys::window().unwrap();
         self.animation_handle = Some(
             window.request_animation_frame(g.borrow().as_ref().unwrap().as_ref().unchecked_ref()).unwrap()
         );
     }
-
     fn fixed_update(&mut self, dt: Duration) {
         self.respawn_dead_ships(dt);
         ai_system(&mut self.world, dt, &self.config);
@@ -126,15 +112,12 @@ impl GameAppInner {
         cleanup_system(&mut self.world, dt);
         self.event_bus.clear();
     }
-
     fn render(&mut self) {
         self.renderer.render(&self.world, &self.config);
     }
-
     pub fn resize(&mut self, width: f32, height: f32, dpr: f32) {
         self.renderer.resize(width, height, dpr);
     }
-
     pub fn destroy(&mut self) {
         self.running = false;
         if let Some(handle) = self.animation_handle {
@@ -143,7 +126,6 @@ impl GameAppInner {
             }
         }
     }
-
     fn process_explosions(&mut self) {
         use crate::ecs::events::GameEvent;
         let mut explosions = Vec::new();
@@ -156,12 +138,10 @@ impl GameAppInner {
             spawn_explosion(&mut self.world, position, faction);
         }
     }
-
     fn respawn_dead_ships(&mut self, dt: Duration) {
         // 预收集重生信息，避免借用冲突
         let mut to_update: Vec<(hecs::Entity, Duration)> = Vec::new();
         let mut to_respawn: Vec<(hecs::Entity, Faction)> = Vec::new();
-
         for (entity, respawn) in self.world.query::<&RespawnTimer>().iter() {
             let remaining = respawn.remaining.saturating_sub(dt);
             if remaining.is_zero() {
@@ -170,14 +150,12 @@ impl GameAppInner {
                 to_update.push((entity, remaining));
             }
         }
-
         // 更新存活的计时器
         for (entity, remaining) in to_update {
             if let Ok(mut respawn) = self.world.get::<&mut RespawnTimer>(entity) {
                 respawn.remaining = remaining;
             }
         }
-
         // 处理重生
         for (entity, faction) in to_respawn {
             self.world.despawn(entity).ok();
@@ -188,7 +166,6 @@ impl GameAppInner {
         }
     }
 }
-
 fn spawn_ship(world: &mut World, config: &GameConfig, position: Vec2, faction: Faction) -> hecs::Entity {
     world.spawn((
         Transform {
@@ -222,7 +199,6 @@ fn spawn_ship(world: &mut World, config: &GameConfig, position: Vec2, faction: F
         },
     ))
 }
-
 fn rand_random() -> f32 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()

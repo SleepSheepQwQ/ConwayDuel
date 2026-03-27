@@ -3,7 +3,6 @@ use std::time::Duration;
 use crate::config::GameConfig;
 use crate::ecs::components::*;
 use crate::ecs::events::EventBus;
-
 pub fn movement_system(world: &mut World, dt: Duration) {
     let dt_secs = dt.as_secs_f32();
     for (_entity, (transform, velocity)) in world.query_mut::<(&mut Transform, &Velocity)>() {
@@ -11,7 +10,6 @@ pub fn movement_system(world: &mut World, dt: Duration) {
         transform.rotation += velocity.angular * dt_secs;
     }
 }
-
 pub fn boundary_system(world: &mut World, _events: &mut EventBus, config: &GameConfig) {
     let w = config.world_width;
     let h = config.world_height;
@@ -35,14 +33,12 @@ pub fn boundary_system(world: &mut World, _events: &mut EventBus, config: &GameC
         }
     }
 }
-
 pub fn collision_system(world: &mut World, events: &mut EventBus, config: &GameConfig) {
     let mut collisions = Vec::new();
     let mut colliders: Vec<(hecs::Entity, Transform, Collider)> = Vec::new();
     for (entity, (transform, collider)) in world.query::<(&Transform, &Collider)>().iter() {
         colliders.push((entity, *transform, *collider));
     }
-
     for i in 0..colliders.len() {
         for j in (i + 1)..colliders.len() {
             let (entity_a, transform_a, collider_a) = &colliders[i];
@@ -54,7 +50,6 @@ pub fn collision_system(world: &mut World, events: &mut EventBus, config: &GameC
             }
         }
     }
-
     for (entity_a, entity_b) in collisions {
         events.push(crate::ecs::events::GameEvent::Collision {
             entity_a,

@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameConfig {
     pub world_width: f32,
@@ -16,7 +15,7 @@ pub struct GameConfig {
     pub bullet_size: f32,
     pub bullet_damage: f32,
     pub bullet_lifetime: f32,
-    pub ship_fire_rate: 2.0,
+    pub ship_fire_rate: f32,
     pub ai_detection_range: f32,
     pub ai_engagement_range: f32,
     pub ai_flee_threshold: f32,
@@ -30,7 +29,6 @@ pub struct GameConfig {
     pub low_performance_mode: bool,
     pub respawn_delay: f32,
 }
-
 impl Default for GameConfig {
     fn default() -> Self {
         Self {
@@ -64,14 +62,12 @@ impl Default for GameConfig {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Faction {
     Red,
     Green,
     Blue,
 }
-
 impl Faction {
     pub fn to_color(&self) -> [f32; 4] {
         match self {
@@ -80,7 +76,6 @@ impl Faction {
             Faction::Blue => [0.2, 0.4, 1.0, 1.0],
         }
     }
-
     pub fn is_enemy(&self, other: &Self) -> bool {
         self != other
     }

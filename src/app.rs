@@ -5,7 +5,6 @@ use std::rc::Rc;
 use std::time::Duration;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
-
 use crate::config::{Faction, GameConfig};
 use crate::core::ai::ai_system;
 use crate::core::combat::{cleanup_system, damage_system, spawn_explosion, weapon_system};
@@ -34,7 +33,6 @@ impl GameAppInner {
             .map_err(|e| format!("渲染器初始化失败: {}", e))?;
         let mut world = World::new();
         let event_bus = EventBus::default();
-
         let client_width = canvas.client_width() as f32;
         let client_height = canvas.client_height() as f32;
         renderer.resize(client_width, client_height, dpr);
@@ -70,7 +68,6 @@ impl GameAppInner {
 
         let app = Rc::new(RefCell::new(self as *mut GameAppInner));
         let app_clone = app.clone();
-
         let f = Rc::new(RefCell::new(None::<Closure<dyn FnMut(f64)>>));
         let g = f.clone();
 
@@ -89,11 +86,11 @@ impl GameAppInner {
                 Duration::from_secs_f64(1.0 / 60.0)
             };
             app.last_frame_time = Some(now_ms);
-
             app.accumulated_time += frame_time;
 
             let fixed_dt = Duration::from_secs_f32(1.0 / app.config.fixed_update_rate);
             let max_accumulation = Duration::from_secs_f32(app.config.max_frame_accumulation);
+
             if app.accumulated_time > max_accumulation {
                 app.accumulated_time = max_accumulation;
             }
@@ -102,7 +99,6 @@ impl GameAppInner {
                 app.fixed_update(fixed_dt);
                 app.accumulated_time -= fixed_dt;
             }
-
             app.render();
 
             let window = web_sys::window().unwrap();
@@ -119,16 +115,13 @@ impl GameAppInner {
 
     fn fixed_update(&mut self, dt: Duration) {
         self.respawn_dead_ships(dt);
-
         ai_system(&mut self.world, dt, &self.config);
         weapon_system(&mut self.world, dt, &mut self.event_bus, &self.config);
         movement_system(&mut self.world, dt);
         boundary_system(&mut self.world, &mut self.event_bus, &self.config);
         collision_system(&mut self.world, &mut self.event_bus, &self.config);
         damage_system(&mut self.world, &self.event_bus);
-
         self.process_explosions();
-
         cleanup_system(&mut self.world, dt);
         self.event_bus.clear();
     }
@@ -152,14 +145,12 @@ impl GameAppInner {
 
     fn process_explosions(&mut self) {
         use crate::ecs::events::GameEvent;
-
         let mut explosions = Vec::new();
         for event in self.event_bus.events() {
             if let GameEvent::Death { position, faction } = event {
                 explosions.push((*position, *faction));
             }
         }
-
         for (position, faction) in explosions {
             spawn_explosion(&mut self.world, position, faction);
         }
@@ -169,12 +160,12 @@ impl GameAppInner {
         let mut to_respawn: Vec<(hecs::Entity, Faction)> = Vec::new();
         let mut to_update: Vec<(hecs::Entity, Duration)> = Vec::new();
 
+        // 遍历查询，注意这里需要不可变借用 RespawnTimer 来读取数据
         for (entity, respawn) in self.world.query::<&RespawnTimer>().iter() {
             let remaining = respawn.remaining.saturating_sub(dt);
             if remaining.is_zero() {
-                // 收集 faction 信息（RespawnTimer 实体上没有 faction，需要从关联数据获取）
-                // 这里直接 despawn 并用默认 faction 重生
-                to_respawn.push((entity, Faction::Red)); // faction 会在下面重新确定
+                // 修复：从 RespawnTimer 组件读取正确的 faction
+                to_respawn.push((entity, respawn.faction));
             } else {
                 to_update.push((entity, remaining));
             }
@@ -188,13 +179,11 @@ impl GameAppInner {
         }
 
         // 再处理需要重生的
-        for (entity, _faction) in to_respawn {
-            // RespawnTimer 实体本身没有 faction，直接用 Red 重生
-            let faction = Faction::Red;
+        for (entity, faction) in to_respawn {
             self.world.despawn(entity).ok();
-
             let x = rand_random() * self.config.world_width;
             let y = rand_random() * self.config.world_height;
+            // 修复：使用保存的 faction 进行重生
             spawn_ship(&mut self.world, &self.config, Vec2::new(x, y), faction);
         }
     }

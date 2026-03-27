@@ -1,7 +1,6 @@
 use glam::Vec2;
 use hecs::World;
 use std::time::Duration;
-
 use crate::config::{Faction, GameConfig};
 use crate::ecs::components::*;
 use crate::ecs::events::{EventBus, GameEvent};
@@ -16,23 +15,17 @@ pub fn weapon_system(
 
     // 收集需要发射的子弹信息
     let mut fire_actions: Vec<(hecs::Entity, Transform, Ship)> = Vec::new();
-
-    for (entity, (transform, ship, weapon, ai)) in
-        world.query::<(&Transform, &Ship, &mut Weapon, &AiState)>().iter()
-    {
-        let should_fire = ai.current_state == AiBehaviorState::Attacking
-            && weapon.remaining_cooldown.is_zero()
-            && ai.target.is_some();
-
+    for (entity, (transform, ship, weapon, ai)) in world.query::<(&Transform, &Ship, &mut Weapon, &AiState)>().iter() {
+        let should_fire = ai.current_state == AiBehaviorState::Attacking &&
+            weapon.remaining_cooldown.is_zero() &&
+            ai.target.is_some();
         if should_fire {
             fire_actions.push((entity, *transform, *ship));
         }
     }
 
     // 更新冷却时间
-    for (_entity, (_transform, _ship, mut weapon, _ai)) in
-        world.query_mut::<(&Transform, &Ship, &mut Weapon, &AiState)>()
-    {
+    for (_entity, (_transform, _ship, mut weapon, _ai)) in world.query_mut::<(&Transform, &Ship, &mut Weapon, &AiState)>() {
         weapon.remaining_cooldown = weapon.remaining_cooldown.saturating_sub(dt);
     }
 
@@ -81,14 +74,13 @@ pub fn damage_system(world: &mut World, events: &mut EventBus) {
 
     for event in events.events() {
         if let GameEvent::Collision { entity_a, entity_b } = event {
-            let (bullet_entity, ship_entity) =
-                if world.get::<&Bullet>(*entity_a).is_ok() {
-                    (*entity_a, *entity_b)
-                } else if world.get::<&Bullet>(*entity_b).is_ok() {
-                    (*entity_b, *entity_a)
-                } else {
-                    continue;
-                };
+            let (bullet_entity, ship_entity) = if world.get::<&Bullet>(*entity_a).is_ok() {
+                (*entity_a, *entity_b)
+            } else if world.get::<&Bullet>(*entity_b).is_ok() {
+                (*entity_b, *entity_a)
+            } else {
+                continue;
+            };
 
             let bullet_damage = if let Ok(bullet) = world.get::<&Bullet>(bullet_entity) {
                 bullet.damage
@@ -121,7 +113,6 @@ pub fn damage_system(world: &mut World, events: &mut EventBus) {
                 } else {
                     continue;
                 };
-
                 let position = if let Ok(t) = world.get::<&Transform>(ship_entity) {
                     t.position
                 } else {
@@ -129,10 +120,10 @@ pub fn damage_system(world: &mut World, events: &mut EventBus) {
                 };
 
                 world.despawn(ship_entity).ok();
-                world.spawn((RespawnTimer::new(Duration::from_secs_f32(3.0)),));
-
+                // 修复：生成 RespawnTimer 时保存 faction
+                world.spawn((RespawnTimer::new(Duration::from_secs_f32(3.0), faction),));
+                
                 deaths.push((position, faction));
-
                 let color = faction.to_color();
                 world.spawn((
                     Transform {
@@ -168,18 +159,18 @@ pub fn damage_system(world: &mut World, events: &mut EventBus) {
 pub fn cleanup_system(world: &mut World, dt: Duration) {
     let mut to_remove: Vec<hecs::Entity> = Vec::new();
 
-    for (entity, bullet) in world.query::<&Bullet>().iter() {
-        let mut b = *bullet;
-        b.lifetime = b.lifetime.saturating_sub(dt);
-        if b.lifetime.is_zero() {
+    // 修复：使用可变引用 (&mut Bullet) 来更新组件数据
+    for (entity, mut bullet) in world.query::<&mut Bullet>().iter() {
+        bullet.lifetime = bullet.lifetime.saturating_sub(dt);
+        if bullet.lifetime.is_zero() {
             to_remove.push(entity);
         }
     }
 
-    for (entity, effect) in world.query::<&Effect>().iter() {
-        let mut eff = *effect;
-        eff.lifetime = eff.lifetime.saturating_sub(dt);
-        if eff.lifetime.is_zero() {
+    // 修复：使用可变引用 (&mut Effect) 来更新组件数据
+    for (entity, mut effect) in world.query::<&mut Effect>().iter() {
+        effect.lifetime = effect.lifetime.saturating_sub(dt);
+        if effect.lifetime.is_zero() {
             to_remove.push(entity);
         }
     }

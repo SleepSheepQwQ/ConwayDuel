@@ -18,6 +18,7 @@ pub struct GameConfig {
     pub bullet_lifetime: f32,
     pub ship_fire_rate: f32,
     pub ai_detection_range: f32,
+    pub ai_engagement_range: f32, // 修复：添加缺失的交战范围字段
     pub ai_flee_threshold: f32,
     pub ai_aggressiveness: f32,
     pub ai_target_lock_time: f32,
@@ -49,6 +50,7 @@ impl Default for GameConfig {
             bullet_lifetime: 2.0,
             ship_fire_rate: 2.0,
             ai_detection_range: 30.0,
+            ai_engagement_range: 15.0, // 修复：设置默认交战范围
             ai_flee_threshold: 0.3,
             ai_aggressiveness: 0.8,
             ai_target_lock_time: 1.0,

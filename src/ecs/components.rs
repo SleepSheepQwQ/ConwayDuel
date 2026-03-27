@@ -102,10 +102,12 @@ pub struct Effect {
 #[derive(Debug, Clone, Copy)]
 pub struct RespawnTimer {
     pub remaining: Duration,
+    pub faction: Faction, // 修复：添加 faction 字段
 }
 
 impl RespawnTimer {
-    pub fn new(delay: Duration) -> Self {
-        Self { remaining: delay }
+    // 修复：构造函数增加 faction 参数
+    pub fn new(delay: Duration, faction: Faction) -> Self {
+        Self { remaining: delay, faction }
     }
 }
